@@ -1,8 +1,8 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-# Fix: --only=production is deprecated in newer npm versions
-RUN npm ci --omit=dev
+# Fix: package-lock.json is missing, so we use npm install instead of npm ci
+RUN npm install --omit=dev
 COPY . .
 RUN npx prisma generate
 # Optional: add build step if needed
