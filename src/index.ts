@@ -68,11 +68,23 @@ console.log('[BULLMQ] Post-call + Campaign workers started')
 
 const start = async () => {
   try {
-    await app.listen({ port: 3001, host: '0.0.0.0' })
-    console.log('API running on port 3001')
+    await app.listen({ port: process.env.PORT ? parseInt(process.env.PORT) : 3001, host: '0.0.0.0' })
+    console.log(`API running on port ${process.env.PORT || 3001}`)
   } catch (err) {
     app.log.error(err)
     process.exit(1)
   }
 }
 start()
+
+// Keep Railway services warm — ping worker every 4 minutes
+// Railway sleeps after 5 min of inactivity on hobby plan
+if (process.env.NODE_ENV === 'production') {
+  setInterval(async () => {
+    try {
+      if (process.env.VOICE_WORKER_URL) {
+        await fetch(`${process.env.VOICE_WORKER_URL}/health`)
+      }
+    } catch { /* Silent — non-critical */ }
+  }, 4 * 60 * 1000)  // Every 4 minutes
+}
