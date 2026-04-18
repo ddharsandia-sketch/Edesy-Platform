@@ -2,7 +2,7 @@ FROM node:20-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 # Fix: package-lock.json is missing, so we use npm install instead of npm ci
-RUN npm install --omit=dev
+RUN npm install --omit=dev --prefer-offline
 COPY . .
 RUN npx prisma generate
 # Optional: add build step if needed
