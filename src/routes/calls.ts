@@ -4,8 +4,13 @@ import { TelephonyManager } from '../lib/telephony'
 import { v4 as uuid } from 'uuid'
 import { requireAuth } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
+import { redis, getPubSub } from '../lib/redis'
 
 const telephony = TelephonyManager.getInstance()
+
+// Internal API key shared with worker
+const INTERNAL_KEY = process.env.INTERNAL_API_KEY || 'dev-internal-key'
+const WORKER_URL = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
 
 export async function callRoutes(app: FastifyInstance) {
 
@@ -43,10 +48,7 @@ export async function callRoutes(app: FastifyInstance) {
     token.addGrant({ roomJoin: true, room: roomName })
     const livekitToken = await token.toJwt()
 
-    const Redis = (await import('ioredis')).default
-    const redis = new Redis(process.env.REDIS_URL!)
     const greetingBytes = await redis.getBuffer(`greeting:${agent.id}`)
-    redis.disconnect()
 
     await prisma.call.create({
       data: {
@@ -60,24 +62,36 @@ export async function callRoutes(app: FastifyInstance) {
       }
     })
 
-    // Spawn Python voice worker — snake_case matches StartCallRequest Pydantic model
-    await fetch('http://localhost:8000/start-call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agent_id: agent.id,
-        call_id: callId,
-        livekit_room_name: roomName,
-        livekit_token: livekitToken,
-        persona_prompt: agent.personaPrompt,
-        language: agent.language,
-        voice_id: agent.voiceId,
-        stt_provider: agent.sttProvider,
-        llm_model: agent.llmModel,
-        use_gemini_live: agent.useGeminiLive,
-        greeting_bytes: greetingBytes ? greetingBytes.toString('base64') : null
+    // Spawn Python voice worker
+    try {
+      const response = await fetch(`${WORKER_URL}/start-call`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify({
+          agent_id: agent.id,
+          call_id: callId,
+          livekit_room_name: roomName,
+          livekit_token: livekitToken,
+          persona_prompt: agent.personaPrompt,
+          language: agent.language,
+          voice_id: agent.voiceId,
+          stt_provider: agent.sttProvider,
+          llm_model: agent.llmModel,
+          use_gemini_live: agent.useGeminiLive,
+          greeting_bytes: greetingBytes ? greetingBytes.toString('base64') : null
+        }),
+        signal: AbortSignal.timeout(5000)
       })
-    })
+
+      if (!response.ok) {
+        console.error(`[API] Worker failed to start call ${callId}: ${response.statusText}`)
+      }
+    } catch (e) {
+      console.error(`[API] Failed to reach worker for call ${callId}:`, e)
+    }
 
     // Generate XML using TelephonyManager
     const twiml = telephony.generateConnectXml(roomName, livekitToken)
@@ -139,22 +153,119 @@ export async function callRoutes(app: FastifyInstance) {
   })
 
   /**
+   * POST /calls/web
+   * Public endpoint used by the landing page Demo Widget to connect to the AI via browser.
+   * Connects via WebRTC, bypassing standard telephony providers.
+   */
+  app.post('/calls/web', async (request, reply) => {
+    let agent = await prisma.agent.findFirst({
+      where: { isActive: true },
+      include: { workspace: true }
+    })
+
+    if (!agent) {
+      const workspace = await prisma.workspace.findFirst() || await prisma.workspace.create({
+        data: { name: 'Demo Workspace', ownerId: 'demo-user' }
+      })
+      agent = await prisma.agent.create({
+        data: {
+          workspaceId: workspace.id,
+          name: 'Sales Assistant',
+          personaPrompt: 'You are a friendly and energetic sales assistant for Edesy Voice AI. Edesy Voice AI provides low-latency, scalable AI voice agents that users can deploy in minutes. Keep your answers brief, engaging, and focus on the ultra-low latency and WebRTC capabilities you are currently demonstrating.',
+          language: 'en',
+          voiceProvider: 'cartesia',
+          voiceId: '71a7ad14-091c-4e8e-a314-022ece01c121',
+          sttProvider: 'deepgram',
+          llmModel: 'gpt-4o-mini',
+          useGeminiLive: false,
+          isActive: true
+        },
+        include: { workspace: true }
+      })
+    }
+
+    const callId = uuid()
+    const roomName = `webcall-${callId}`
+
+    const token = new AccessToken(
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!,
+      { identity: `web-user-${callId}`, name: 'Web User' }
+    )
+    token.addGrant({ roomJoin: true, room: roomName })
+    const userToken = await token.toJwt()
+
+    const workerAuthToken = new AccessToken(
+      process.env.LIVEKIT_API_KEY!,
+      process.env.LIVEKIT_API_SECRET!,
+      { identity: `worker-${callId}`, name: 'AI Voice' }
+    )
+    workerAuthToken.addGrant({ roomJoin: true, room: roomName })
+    const workerToken = await workerAuthToken.toJwt()
+
+    await prisma.call.create({
+      data: {
+        id: callId,
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        callerNumber: 'web-browser',
+        direction: 'inbound',
+        status: 'connected',
+        liveKitRoomId: roomName
+      }
+    })
+
+    try {
+      const response = await fetch(`${WORKER_URL}/start-call`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify({
+          agent_id: agent.id,
+          call_id: callId,
+          livekit_room_name: roomName,
+          livekit_token: workerToken,
+          persona_prompt: 'You are a friendly and energetic sales assistant for Edesy Voice AI. Edesy Voice AI provides low-latency, scalable AI voice agents that users can deploy in minutes. Keep your answers brief, engaging, and focus on the ultra-low latency you are currently demonstrating.',
+          language: agent.language,
+          voice_id: agent.voiceId,
+          stt_provider: agent.sttProvider,
+          llm_model: agent.llmModel,
+          use_gemini_live: agent.useGeminiLive,
+          industry: 'general'
+        }),
+        signal: AbortSignal.timeout(5000)
+      })
+
+      if (!response.ok) {
+        console.error(`[API] Worker failed to start web call ${callId}: ${response.statusText}`)
+      }
+    } catch (e) {
+      console.error(`[API] Failed to reach worker for web call ${callId}:`, e)
+    }
+
+    return reply.send({
+      callId,
+      roomName,
+      token: userToken,
+      url: process.env.LIVEKIT_URL || 'wss://your-app.livekit.cloud'
+    })
+  })
+
+  /**
    * PATCH /calls/:id/status
    * Internal-only endpoint called by the Python voice worker.
-   * Updates call status in PostgreSQL.
-   * Protected by X-Internal-Key header (not JWT — worker has no user token).
    */
   app.patch('/calls/:id/status', async (request, reply) => {
-    // Validate internal key — never expose this endpoint publicly
     const internalKey = request.headers['x-internal-key']
-    if (internalKey !== (process.env.INTERNAL_API_KEY || 'dev-internal-key')) {
+    if (internalKey !== INTERNAL_KEY) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
     const { id } = request.params as { id: string }
     const { status } = request.body as { status: string }
 
-    // Valid status values — reject anything else
     const validStatuses = [
       'dialing', 'connected', 'handling_objection',
       'extracting_data', 'completed', 'failed', 'transferred'
@@ -175,12 +286,11 @@ export async function callRoutes(app: FastifyInstance) {
       }
     })
 
-    // If call ended, queue the post-call processing job
     if (status === 'completed' || status === 'failed') {
       const { postCallQueue } = await import('../jobs/post-call')
       await postCallQueue.add('process-call', { callId: id }, {
-        delay: 2000,    // Wait 2 seconds after call ends before processing
-        attempts: 3,    // Retry up to 3 times on failure
+        delay: 2000,
+        attempts: 3,
         backoff: { type: 'exponential', delay: 5000 }
       })
     }
@@ -230,10 +340,7 @@ export async function callRoutes(app: FastifyInstance) {
     })
     if (!call) return reply.code(404).send({ error: 'Active call not found' })
 
-    const Redis = (await import('ioredis')).default
-    const redis = new Redis(process.env.REDIS_URL!)
     await redis.publish(`supervisor:${id}`, directive)
-    redis.disconnect()
 
     await prisma.call.update({
       where: { id },
@@ -258,9 +365,7 @@ export async function callRoutes(app: FastifyInstance) {
     reply.raw.setHeader('Connection', 'keep-alive')
     reply.raw.flushHeaders()
 
-    const Redis = (await import('ioredis')).default
-    const redis = new Redis(process.env.REDIS_URL!)
-    const pubsub = redis.duplicate()
+    const pubsub = getPubSub().duplicate()
 
     await pubsub.subscribe(
       `transcript:${id}`,
@@ -274,15 +379,17 @@ export async function callRoutes(app: FastifyInstance) {
     })
 
     request.raw.on('close', async () => {
-      await pubsub.unsubscribe()
-      pubsub.disconnect()
-      redis.disconnect()
+      try {
+        await pubsub.unsubscribe()
+        pubsub.disconnect()
+      } catch (e) {
+        // Ignore disconnect errors
+      }
     })
   })
 
   /**
    * GET /analytics/overview
-   * Returns workspace-level stats for the dashboard header cards.
    */
   app.get('/analytics/overview', { preHandler: requireAuth }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
@@ -328,7 +435,6 @@ export async function callRoutes(app: FastifyInstance) {
 
   /**
    * GET /analytics/calls-over-time
-   * Returns daily call volume for the line chart.
    */
   app.get('/analytics/calls-over-time', { preHandler: requireAuth }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
@@ -337,7 +443,6 @@ export async function callRoutes(app: FastifyInstance) {
     const since = new Date()
     since.setDate(since.getDate() - Number(days))
 
-    // Raw query for date grouping (Prisma doesn't have native date bucketing)
     const result = await prisma.$queryRaw<Array<{ date: string; count: bigint }>>`
       SELECT
         DATE_TRUNC('day', "startTime")::date::text AS date,
@@ -357,18 +462,12 @@ export async function callRoutes(app: FastifyInstance) {
 
   /**
    * POST /calls/:id/ghost-mode/activate
-   * Activate Ghost Mode for a live call.
-   * Proxies to Python worker — requires active call + valid ElevenLabs voice ID.
-   *
-   * Body: { agentVoiceId: string }
-   * Example body: { "agentVoiceId": "71a7ad14-091c-4e8e-a314-022ece01c121" }
    */
   app.post('/calls/:id/ghost-mode/activate', { preHandler: requireAuth }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
     const { id } = request.params as { id: string }
     const { agentVoiceId } = request.body as { agentVoiceId: string }
 
-    // Verify the call is active and belongs to this workspace
     const call = await prisma.call.findFirst({
       where: {
         id,
@@ -376,36 +475,40 @@ export async function callRoutes(app: FastifyInstance) {
         status: { in: ['connected', 'handling_objection', 'extracting_data'] }
       }
     })
+
     if (!call) {
       return reply.code(404).send({
         error: 'Active call not found. Ghost Mode requires a connected call.'
       })
     }
 
-    // Proxy to Python worker
-    const res = await fetch('http://localhost:8000/ghost-mode/activate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        call_id: id,
-        agent_voice_id: agentVoiceId,
+    try {
+      const res = await fetch(`${WORKER_URL}/ghost-mode/activate`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify({
+          call_id: id,
+          agent_voice_id: agentVoiceId,
+        }),
+        signal: AbortSignal.timeout(5000)
       })
-    })
 
-    if (!res.ok) {
-      const err = await res.json()
-      return reply.code(res.status).send(err)
+      if (!res.ok) {
+        const err = await res.json()
+        return reply.code(res.status).send(err)
+      }
+
+      return reply.send(await res.json())
+    } catch (e) {
+      return reply.code(502).send({ error: 'Worker unavailable' })
     }
-
-    return reply.send(await res.json())
   })
 
   /**
    * POST /calls/:id/ghost-mode/speak
-   * Send supervisor audio chunk to be morphed and injected.
-   * Called repeatedly every ~2 seconds while supervisor speaks.
-   *
-   * Body: { audioBase64: string }  — Base64-encoded raw PCM 16kHz audio
    */
   app.post('/calls/:id/ghost-mode/speak', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string }
@@ -415,31 +518,56 @@ export async function callRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'audioBase64 is required' })
     }
 
-    const res = await fetch('http://localhost:8000/ghost-mode/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        call_id: id,
-        audio_base64: audioBase64,
+    try {
+      const res = await fetch(`${WORKER_URL}/ghost-mode/speak`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify({
+          call_id: id,
+          audio_base64: audioBase64,
+        }),
+        signal: AbortSignal.timeout(5000)
       })
-    })
 
-    return reply.send(await res.json())
+      if (!res.ok) {
+        const err = await res.json()
+        return reply.code(res.status).send(err)
+      }
+
+      return reply.send(await res.json())
+    } catch (e) {
+      return reply.code(502).send({ error: 'Worker unavailable' })
+    }
   })
 
   /**
    * POST /calls/:id/ghost-mode/deactivate
-   * Stop Ghost Mode — agent resumes normal AI-driven responses.
    */
   app.post('/calls/:id/ghost-mode/deactivate', { preHandler: requireAuth }, async (request, reply) => {
     const { id } = request.params as { id: string }
 
-    const res = await fetch('http://localhost:8000/ghost-mode/deactivate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ call_id: id })
-    })
+    try {
+      const res = await fetch(`${WORKER_URL}/ghost-mode/deactivate`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': INTERNAL_KEY
+        },
+        body: JSON.stringify({ call_id: id }),
+        signal: AbortSignal.timeout(5000)
+      })
 
-    return reply.send(await res.json())
+      if (!res.ok) {
+        const err = await res.json()
+        return reply.code(res.status).send(err)
+      }
+
+      return reply.send(await res.json())
+    } catch (e) {
+      return reply.code(502).send({ error: 'Worker unavailable' })
+    }
   })
 }
