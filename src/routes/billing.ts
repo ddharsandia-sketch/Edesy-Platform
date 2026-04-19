@@ -1,10 +1,7 @@
 import { FastifyInstance } from 'fastify'
-import Stripe from 'stripe'
 import { prisma } from '../lib/prisma'
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-06-20',
-})
+import { createSubscription } from '../lib/paypal'
+import { requireAuth } from '../middleware/auth'
 
 // Plan limits — enforced on every call start
 export const PLAN_LIMITS = {
@@ -51,7 +48,7 @@ export async function billingRoutes(app: FastifyInstance) {
       Object.entries(PLAN_LIMITS).map(([tier, config]) => ({
         tier,
         ...config,
-        priceId: process.env[`STRIPE_${tier.toUpperCase()}_PRICE_ID`] ?? null,
+        planId: process.env[`PAYPAL_${tier.toUpperCase()}_PLAN_ID`] ?? null,
       }))
     )
   })
@@ -60,14 +57,14 @@ export async function billingRoutes(app: FastifyInstance) {
    * GET /billing/subscription
    * Returns the current workspace's subscription status.
    */
-  app.get('/billing/subscription', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/billing/subscription', { preHandler: requireAuth }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
 
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: {
-        stripeCustomerId: true,
-        stripeSubscriptionId: true,
+        paypalPayerId: true,
+        paypalSubscriptionId: true,
         planTier: true,
         planExpiresAt: true,
       }
@@ -100,84 +97,52 @@ export async function billingRoutes(app: FastifyInstance) {
         minutesRemaining: Math.max(0, limits.minutesPerMonth - minutesUsed),
         pctUsed: Math.round((minutesUsed / limits.minutesPerMonth) * 100),
       },
-      stripeSubscriptionId: workspace.stripeSubscriptionId,
+      paypalSubscriptionId: workspace.paypalSubscriptionId,
     })
   })
 
   /**
    * POST /billing/checkout
-   * Create a Stripe Checkout session to upgrade/start a subscription.
-   * Returns a checkout URL to redirect the user to.
+   * Create a PayPal Subscription request.
+   * Returns approval URL and subscription ID.
    *
    * Body: { tier: "starter" | "growth" | "enterprise" }
    */
-  app.post('/billing/checkout', { preHandler: app.requireAuth }, async (request, reply) => {
-    const { workspaceId, email } = request.user as { workspaceId: string; email: string }
+  app.post('/billing/checkout', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
     const { tier } = request.body as { tier: PlanTier }
 
     if (!['starter', 'growth', 'enterprise'].includes(tier)) {
       return reply.code(400).send({ error: 'Invalid tier. Must be: starter, growth, or enterprise' })
     }
 
-    const priceId = process.env[`STRIPE_${tier.toUpperCase()}_PRICE_ID`]
-    if (!priceId) return reply.code(500).send({ error: `Price ID for ${tier} not configured` })
+    const planId = process.env[`PAYPAL_${tier.toUpperCase()}_PLAN_ID`]
+    if (!planId) return reply.code(500).send({ error: `PayPal Plan ID for ${tier} not configured` })
 
-    // Get or create Stripe customer for this workspace
-    let workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } })
-    let stripeCustomerId = workspace?.stripeCustomerId
+    try {
+      const subscription: any = await createSubscription(planId, workspaceId)
+      
+      // Get the approval link from the response
+      const approvalUrl = subscription.links?.find((l: any) => l.rel === 'approve')?.href
 
-    if (!stripeCustomerId) {
-      const customer = await stripe.customers.create({
-        email,
-        metadata: { workspaceId }
+      return reply.send({ 
+        checkoutUrl: approvalUrl,
+        subscriptionId: subscription.id 
       })
-      stripeCustomerId = customer.id
-      await prisma.workspace.update({
-        where: { id: workspaceId },
-        data: { stripeCustomerId }
-      })
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message })
     }
-
-    // Create checkout session
-    const session = await stripe.checkout.sessions.create({
-      customer: stripeCustomerId,
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings?billing=success`,
-      cancel_url:  `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings?billing=cancelled`,
-      metadata: { workspaceId, tier },
-      subscription_data: {
-        metadata: { workspaceId, tier }
-      },
-      allow_promotion_codes: true,
-    })
-
-    return reply.send({ checkoutUrl: session.url })
   })
 
   /**
    * POST /billing/portal
-   * Create a Stripe Customer Portal session.
-   * Lets users manage their subscription, update payment method, view invoices.
+   * For PayPal, there is no generic "billing portal" session like Stripe.
+   * We redirect users to their PayPal account subscriptions page.
    */
-  app.post('/billing/portal', { preHandler: app.requireAuth }, async (request, reply) => {
-    const { workspaceId } = request.user as { workspaceId: string }
-
-    const workspace = await prisma.workspace.findUnique({
-      where: { id: workspaceId }
+  app.post('/billing/portal', { preHandler: requireAuth }, async (request, reply) => {
+    // PayPal Subscriptions are managed directly in the user's PayPal account
+    return reply.send({ 
+       portalUrl: 'https://www.paypal.com/myaccount/autopay/' 
     })
-
-    if (!workspace?.stripeCustomerId) {
-      return reply.code(400).send({
-        error: 'No active subscription found. Subscribe first.'
-      })
-    }
-
-    const session = await stripe.billingPortal.sessions.create({
-      customer: workspace.stripeCustomerId,
-      return_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`,
-    })
-
-    return reply.send({ portalUrl: session.url })
   })
 }

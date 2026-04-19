@@ -71,18 +71,18 @@ export async function webhookRoutes(app: FastifyInstance) {
         startTime: new Date(),
         twilioCallSid: body.CallSid,
         transcript: [],
-        artifact: null,
+        artifact: {}, // Use empty object instead of null for Json field
       }
     })
 
     console.log(`[TWILIO] Created call record ${call.id} for agent ${agent.name}`)
 
     // Fetch greeting bytes from Redis cache (pre-warmed in Phase 1)
-    const { createClient } = await import('redis')
-    const redis = createClient({ url: process.env.REDIS_URL })
-    await redis.connect()
+    // Fetch greeting bytes from Redis cache
+    const Redis = (await import('ioredis')).default
+    const redis = new Redis(process.env.REDIS_URL!)
     const greetingBase64 = await redis.get(`greeting:${agent.id}`)
-    await redis.disconnect()
+    await redis.quit()
 
     // Generate LiveKit token for this call
     const { AccessToken } = await import('livekit-server-sdk')
@@ -303,5 +303,175 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ received: true })
+  })
+
+  /**
+   * POST /webhooks/paypal
+   * Handles PayPal billing and subscription events.
+   */
+  app.post('/webhooks/paypal', {
+    config: { rawBody: true }
+  }, async (request, reply) => {
+    const rawPayload = (request as any).rawBody as string
+    const headers = request.headers
+
+    const isValid = await import('../lib/paypal').then(m => m.verifyWebhookSignature(rawPayload, headers))
+    if (!isValid && process.env.NODE_ENV === 'production') {
+      console.error('[PAYPAL] Webhook signature verification failed')
+      return reply.code(400).send('Invalid PayPal signature')
+    }
+
+    const event = JSON.parse(rawPayload)
+    console.log(`[PAYPAL] Event: ${event.event_type}`)
+
+    switch (event.event_type) {
+      case 'BILLING.SUBSCRIPTION.ACTIVATED': {
+        const sub = event.resource
+        const workspaceId = sub.custom_id
+        
+        // Map plan_id to tier (assuming we store this in .env or a map)
+        const tier = 'starter' // Map based on sub.plan_id in real app
+
+        if (workspaceId) {
+          await prisma.workspace.update({
+            where: { id: workspaceId },
+            data: {
+              paypalSubscriptionId: sub.id,
+              planTier: tier,
+              planExpiresAt: new Date(Date.now() + 32 * 24 * 60 * 60 * 1000) // Default to 1 month
+            }
+          })
+          console.log(`[PAYPAL] Workspace ${workspaceId} activated: ${tier}`)
+        }
+        break
+      }
+
+      case 'BILLING.SUBSCRIPTION.CANCELLED': {
+        const sub = event.resource
+        const workspaceId = sub.custom_id
+        if (workspaceId) {
+          await prisma.workspace.update({
+            where: { id: workspaceId },
+            data: {
+              planTier: 'free',
+              paypalSubscriptionId: null,
+              planExpiresAt: null,
+            }
+          })
+          console.log(`[PAYPAL] Workspace ${workspaceId} downgraded to free`)
+        }
+        break
+      }
+
+      case 'PAYMENT.SALE.COMPLETED': {
+        // Log payment for reporting
+        console.log(`[PAYPAL] Payment received: ${event.resource.amount.total} ${event.resource.amount.currency}`)
+        break
+      }
+    }
+
+    return reply.send({ received: true })
+  })
+
+  /**
+   * POST /webhooks/exotel/passthru
+   * Exotel calls this URL when an inbound call arrives on your ExoPhone.
+   * We respond with the Exotel "Voicebot Applet" JSON that tells Exotel:
+   *   "Stream this call's audio to wss://voice-worker.../exotel-ws"
+   *
+   * How to configure in Exotel App Bazaar:
+   * 1. Create a new App in App Bazaar
+   * 2. Add a "Passthru" applet
+   * 3. Set the URL to: https://edesyapi-production.up.railway.app/webhooks/exotel/passthru
+   */
+  app.post('/webhooks/exotel/passthru', async (request, reply) => {
+    const body = request.body as any
+    const callSid = body?.CallSid || body?.call_sid || 'unknown'
+    console.log(`[EXOTEL] Inbound call: ${callSid}`)
+
+    // Look up phone number to find the agent
+    const toNumber = body?.To || body?.to
+    const phoneRecord = await prisma.phoneNumber.findUnique({
+      where: { number: toNumber },
+      include: { agent: true }
+    })
+
+    if (!phoneRecord) {
+      // No agent configured — play a message and hang up
+      return reply.type('application/json').send({
+        actions: [
+          { say: { text: 'This number is not configured. Goodbye.', voice: 'female', language: 'en' } },
+          { hangup: {} }
+        ]
+      })
+    }
+
+    const agent = phoneRecord.agent
+
+    // Store agent prompt in Redis so the WebSocket handler can pick it up
+    const { default: Redis } = await import('ioredis')
+    const redis = new Redis(process.env.REDIS_URL!)
+    await redis.setex(`agent_prompt:${callSid}`, 3600, agent.personaPrompt)
+    redis.disconnect()
+
+    // The voice worker WebSocket URL — Exotel will stream audio here
+    const workerUrl = process.env.VOICE_WORKER_URL || 'http://edesyworker.railway.internal:8000'
+    const wsUrl = workerUrl.replace(/^http/, 'ws') + '/exotel-ws'
+
+    console.log(`[EXOTEL] Routing call ${callSid} → agent "${agent.name}" → ${wsUrl}`)
+
+    // Exotel Voicebot Applet JSON response
+    return reply.type('application/json').send({
+      actions: [
+        {
+          voicebot: {
+            botUrl: wsUrl,
+            provider: 'custom',
+            streamSid: callSid,
+          }
+        }
+      ]
+    })
+  })
+
+  /**
+   * POST /webhooks/exotel/status
+   * Exotel calls this when a call ends.
+   * Updates call record and triggers post-call processing.
+   */
+  app.post('/webhooks/exotel/status', async (request, reply) => {
+    const body = request.body as any
+    const callSid = body?.CallSid || body?.call_sid
+
+    console.log(`[EXOTEL] Call status: ${callSid} → ${body?.Status || body?.status}`)
+
+    const call = await prisma.call.findFirst({
+      where: { twilioCallSid: callSid }
+    })
+
+    if (call) {
+      const rawStatus = (body?.Status || body?.status || 'completed').toLowerCase()
+      const status = ['completed', 'answered'].includes(rawStatus) ? 'completed' : 'failed'
+
+      await prisma.call.update({
+        where: { id: call.id },
+        data: {
+          status,
+          endTime: new Date(),
+          duration: body?.Duration ? parseInt(body.Duration) : undefined,
+        }
+      })
+
+      if (status === 'completed') {
+        const { postCallQueue } = await import('../jobs/post-call')
+        await postCallQueue.add('process-call', { callId: call.id }, {
+          delay: 2000,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 }
+        })
+      }
+    }
+
+    return reply.send({ ok: true })
   })
 }

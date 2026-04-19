@@ -1,24 +1,37 @@
+# ── Stage 1: Builder ─────────────────────────────────────────────────────────
 FROM node:20-slim AS builder
 WORKDIR /app
-COPY package*.json ./
-# Fix: package-lock.json is missing, so we use npm install instead of npm ci
-RUN npm install --omit=dev --prefer-offline
-COPY . .
-RUN npx prisma generate
-# Optional: add build step if needed
-# RUN npm run build
 
+COPY package*.json ./
+# Install ALL deps (including devDeps like typescript, ts-node) for compilation
+RUN npm install --prefer-offline
+
+COPY . .
+# Generate Prisma client
+RUN npx prisma generate
+# Compile TypeScript → dist/
+RUN npx tsc --outDir dist
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM node:20-slim AS runtime
 WORKDIR /app
-# Fix: install curl for healthcheck and ensure mirrors work
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app .
+
+# Copy only production node_modules (no devDeps in runtime)
+COPY package*.json ./
+RUN npm install --omit=dev --prefer-offline
+
+# Copy compiled JS and Prisma artifacts from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=8080
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:3001/health || exit 1
-EXPOSE 3001
-# Note: In production it's better to use compiled JS, but keeping ts-node for this setup
-CMD ["npx", "ts-node", "src/index.ts"]
+    CMD curl -f http://localhost:8080/health || exit 1
+EXPOSE 8080
+CMD ["node", "dist/index.js"]

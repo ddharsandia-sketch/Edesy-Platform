@@ -13,6 +13,8 @@ model Workspace {
   plan      String   @default("free")  // "free" | "pro" | "enterprise"
   stripeCustomerId     String?  @unique
   stripeSubscriptionId String?  @unique
+  paypalSubscriptionId String?  @unique
+  paypalPayerId        String?  @unique
   planTier             String   @default("free")
   planExpiresAt        DateTime?
   createdAt DateTime @default(now())

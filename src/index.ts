@@ -30,11 +30,12 @@ const app = Fastify({ logger: true })
 
 // FIX 1: Register raw body BEFORE any routes — required for Stripe webhook signature verification
 // global: false means only routes with config: { rawBody: true } capture the raw buffer
-await app.register(rawBody, {
+// FIX 1: Register raw body BEFORE any routes — required for Stripe/PayPal signature verification
+app.register(rawBody, {
   field: 'rawBody',
   global: false,
-  encoding: false,  // Keep as Buffer — Stripe needs Buffer, not string
-  runFirst: true,   // Must run before Fastify's JSON body parser
+  encoding: false,
+  runFirst: true,
 })
 
 app.register(cors, { origin: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000', credentials: true })

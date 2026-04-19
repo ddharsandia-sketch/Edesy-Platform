@@ -1,14 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import { AccessToken } from 'livekit-server-sdk'
-import twilio from 'twilio'
+import { TelephonyManager } from '../lib/telephony'
 import { v4 as uuid } from 'uuid'
 import { requireAuth } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
-)
+const telephony = TelephonyManager.getInstance()
 
 export async function callRoutes(app: FastifyInstance) {
 
@@ -82,12 +79,8 @@ export async function callRoutes(app: FastifyInstance) {
       })
     })
 
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="wss://${process.env.LIVEKIT_URL?.replace('wss://', '')}/twilio-sip?room=${roomName}&amp;token=${livekitToken}" />
-  </Connect>
-</Response>`
+    // Generate XML using TelephonyManager
+    const twiml = telephony.generateConnectXml(roomName, livekitToken)
 
     return reply.header('Content-Type', 'text/xml').send(twiml)
   })
@@ -136,7 +129,7 @@ export async function callRoutes(app: FastifyInstance) {
       }
     })
 
-    await twilioClient.calls.create({
+    await telephony.makeCall({
       to: targetNumber,
       from: agent.phoneNumbers[0].number,
       url: `${process.env.NEXT_PUBLIC_API_URL}/calls/inbound-twiml?callId=${callId}&roomName=${roomName}&token=${livekitToken}`
