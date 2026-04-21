@@ -1,18 +1,15 @@
 import { Queue, Worker } from 'bullmq'
-import { Redis } from 'ioredis'
 import { prisma } from '../lib/prisma'
+import { redis } from '../lib/redis'
 import OpenAI from 'openai'
 import Stripe from 'stripe'
 import { fireCrmWebhooks } from '../lib/crm'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' })
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-03-25.dahlia' as any })
 
-// ── Redis connection for BullMQ ──────────────────────────────────────────────
-// BullMQ needs a raw ioredis instance (not the URL string)
-const redisConnection = new Redis(process.env.REDIS_URL!, {
-  maxRetriesPerRequest: null,  // Required by BullMQ
-  tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined
-})
+// Use shared Redis connection for BullMQ
+const redisConnection = redis.duplicate()
+redisConnection.options.maxRetriesPerRequest = null
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! })
 
@@ -113,18 +110,22 @@ export const postCallWorker = new Worker('post-call', async (job) => {
   })
 
   // ── Step 6: Report usage to Stripe Meter ──────────────────────────────────
-  if (durationSeconds > 0 && call.workspace.stripeCustomerId) {
+  if (durationSeconds > 0 && call.workspaceId) {
     try {
-      const minutes = Math.ceil(durationSeconds / 60)
-      await stripe.billing.meterEvents.create({
-        event_name: 'call_minute_used',
-        payload: {
-          stripe_customer_id: call.workspace.stripeCustomerId,
-          value: minutes.toString(),
-        },
-        timestamp: Math.floor(Date.now() / 1000),
-      })
-      console.log(`[STRIPE] Metered ${minutes} minutes for ${call.workspaceId}`)
+      // Fetch stripeCustomerId from workspace
+      const workspace = await prisma.workspace.findUnique({ where: { id: call.workspaceId } })
+      if (workspace?.stripeCustomerId) {
+        const minutes = Math.ceil(durationSeconds / 60)
+        await stripe.billing.meterEvents.create({
+          event_name: 'call_minute_used',
+          payload: {
+            stripe_customer_id: workspace.stripeCustomerId,
+            value: minutes.toString(),
+          },
+          timestamp: Math.floor(Date.now() / 1000),
+        })
+        console.log(`[STRIPE] Metered ${minutes} minutes for ${call.workspaceId}`)
+      }
     } catch (err: any) {
       console.error(`[STRIPE] Metering failed:`, err.message)
     }

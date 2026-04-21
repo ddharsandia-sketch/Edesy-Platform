@@ -1,9 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import Stripe from 'stripe'
 import twilio from 'twilio'
+import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { redis } from '../lib/redis'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2024-06-20' })
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-03-25.dahlia' as any })
 
 export async function webhookRoutes(app: FastifyInstance) {
   /**
@@ -19,13 +21,19 @@ export async function webhookRoutes(app: FastifyInstance) {
    *   5. Twilio opens a WebSocket to /webhooks/twilio/stream
    *   6. We bridge that WebSocket to the Pipecat pipeline
    */
+  const TwilioInboundSchema = z.object({
+    From: z.string(),
+    To: z.string(),
+    CallSid: z.string(),
+    CallStatus: z.string().optional()
+  })
+
   app.post('/webhooks/twilio/inbound', async (request, reply) => {
-    const body = request.body as {
-      From: string
-      To: string
-      CallSid: string
-      CallStatus: string
+    const validation = TwilioInboundSchema.safeParse(request.body)
+    if (!validation.success) {
+      return reply.code(400).send({ error: 'Invalid request body' })
     }
+    const body = validation.data
 
     console.log(`[TWILIO] Inbound call: ${body.From} → ${body.To} (${body.CallSid})`)
 
@@ -77,12 +85,8 @@ export async function webhookRoutes(app: FastifyInstance) {
 
     console.log(`[TWILIO] Created call record ${call.id} for agent ${agent.name}`)
 
-    // Fetch greeting bytes from Redis cache (pre-warmed in Phase 1)
     // Fetch greeting bytes from Redis cache
-    const Redis = (await import('ioredis')).default
-    const redis = new Redis(process.env.REDIS_URL!)
     const greetingBase64 = await redis.get(`greeting:${agent.id}`)
-    await redis.quit()
 
     // Generate LiveKit token for this call
     const { AccessToken } = await import('livekit-server-sdk')
@@ -137,12 +141,18 @@ export async function webhookRoutes(app: FastifyInstance) {
    * Twilio calls this when a call's status changes.
    * We use it to detect call completion and trigger post-processing.
    */
+  const TwilioStatusSchema = z.object({
+    CallSid: z.string(),
+    CallStatus: z.string(),
+    CallDuration: z.string().optional()
+  })
+
   app.post('/webhooks/twilio/status', async (request, reply) => {
-    const body = request.body as {
-      CallSid: string
-      CallStatus: string
-      CallDuration?: string
+    const validation = TwilioStatusSchema.safeParse(request.body)
+    if (!validation.success) {
+      return reply.code(400).send({ error: 'Invalid request body' })
     }
+    const body = validation.data
 
     console.log(`[TWILIO] Status update: ${body.CallSid} → ${body.CallStatus}`)
 
@@ -231,7 +241,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       return reply.code(400).send('Missing raw body')
     }
 
-    let event: Stripe.Event
+    let event: any
     try {
       event = stripe.webhooks.constructEvent(
         rawPayload,   // Buffer — Stripe computes HMAC against this exact byte sequence
@@ -249,7 +259,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       // ── Subscription started or upgraded ───────────────────────────────────
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
-        const sub = event.data.object as Stripe.Subscription
+        const sub = event.data.object as any
         const workspaceId = sub.metadata?.workspaceId
         const tier = sub.metadata?.tier || 'starter'
 
@@ -269,7 +279,7 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       // ── Subscription cancelled ─────────────────────────────────────────────
       case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription
+        const sub = event.data.object as any
         const workspaceId = sub.metadata?.workspaceId
         if (workspaceId) {
           await prisma.workspace.update({
@@ -287,7 +297,7 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       // ── Payment succeeded ──────────────────────────────────────────────────
       case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as Stripe.Invoice
+        const invoice = event.data.object as any
         console.log(`[STRIPE] Payment succeeded: $${(invoice.amount_paid / 100).toFixed(2)}`)
         // You could send a receipt email here via Resend/SendGrid
         break
@@ -295,7 +305,7 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       // ── Payment failed ─────────────────────────────────────────────────────
       case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice
+        const invoice = event.data.object as any
         console.warn(`[STRIPE] Payment FAILED for customer: ${invoice.customer}`)
         // TODO: Send dunning email to workspace owner
         break
@@ -384,9 +394,30 @@ export async function webhookRoutes(app: FastifyInstance) {
    * 2. Add a "Passthru" applet
    * 3. Set the URL to: https://edesyapi-production.up.railway.app/webhooks/exotel/passthru
    */
+  const ExotelPassthruSchema = z.object({
+    CallSid: z.string().optional(),
+    call_sid: z.string().optional(),
+    To: z.string().optional(),
+    to: z.string().optional()
+  })
+
   app.post('/webhooks/exotel/passthru', async (request, reply) => {
-    const body = request.body as any
+    // Verify Exotel signature
+    const signature = request.headers['x-exotel-signature'] as string
+    const expectedSignature = process.env.EXOTEL_API_KEY
+
+    if (process.env.NODE_ENV === 'production' && signature !== expectedSignature) {
+      console.error('[EXOTEL] Invalid signature')
+      return reply.code(403).send('Invalid Exotel signature')
+    }
+
+    const validation = ExotelPassthruSchema.safeParse(request.body)
+    if (!validation.success) {
+      return reply.code(400).send({ error: 'Invalid request body' })
+    }
+    const body = validation.data
     const callSid = body?.CallSid || body?.call_sid || 'unknown'
+
     console.log(`[EXOTEL] Inbound call: ${callSid}`)
 
     // Look up phone number to find the agent
@@ -409,10 +440,7 @@ export async function webhookRoutes(app: FastifyInstance) {
     const agent = phoneRecord.agent
 
     // Store agent prompt in Redis so the WebSocket handler can pick it up
-    const { default: Redis } = await import('ioredis')
-    const redis = new Redis(process.env.REDIS_URL!)
     await redis.setex(`agent_prompt:${callSid}`, 3600, agent.personaPrompt)
-    redis.disconnect()
 
     // The voice worker WebSocket URL — Exotel will stream audio here
     const workerUrl = process.env.VOICE_WORKER_URL || 'http://edesyworker.railway.internal:8000'
