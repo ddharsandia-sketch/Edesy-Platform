@@ -1,28 +1,16 @@
-import paypal from '@paypal/checkout-server-sdk'
+// PayPal integration using plain fetch (no SDK) to avoid type declaration issues
+// with @paypal/checkout-server-sdk which lacks TypeScript types
 
 /**
- * PayPal Environment Setup
- */
-function environment() {
-  const clientId = process.env.PAYPAL_CLIENT_ID || ''
-  const clientSecret = process.env.PAYPAL_CLIENT_SECRET || ''
-
-  if (process.env.NODE_ENV === 'production') {
-    return new paypal.core.LiveEnvironment(clientId, clientSecret)
-  }
-  return new paypal.core.SandboxEnvironment(clientId, clientSecret)
-}
-
-export const client = new paypal.core.PayPalHttpClient(environment())
-
-/**
- * Generate Access Token for REST API calls (useful for Subscriptions which aren't in the SDK)
+ * Generate Access Token for REST API calls
  */
 export async function getAccessToken(): Promise<string> {
   const clientId = process.env.PAYPAL_CLIENT_ID
   const clientSecret = process.env.PAYPAL_CLIENT_SECRET
   const isProd = process.env.NODE_ENV === 'production'
-  const url = isProd ? 'https://api-m.paypal.com/v1/oauth2/token' : 'https://api-m.sandbox.paypal.com/v1/oauth2/token'
+  const url = isProd
+    ? 'https://api-m.paypal.com/v1/oauth2/token'
+    : 'https://api-m.sandbox.paypal.com/v1/oauth2/token'
 
   const response = await fetch(url, {
     method: 'POST',
@@ -31,22 +19,22 @@ export async function getAccessToken(): Promise<string> {
       'Accept-Language': 'en_US',
       'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
     },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials'
-    })
+    body: new URLSearchParams({ grant_type: 'client_credentials' })
   })
 
-  const data = await response.json()
+  const data = await response.json() as { access_token: string }
   return data.access_token
 }
 
 /**
- * Create a PayPal Subscription request
+ * Create a PayPal Subscription
  */
 export async function createSubscription(planId: string, workspaceId: string) {
   const accessToken = await getAccessToken()
   const isProd = process.env.NODE_ENV === 'production'
-  const url = isProd ? 'https://api-m.paypal.com/v1/billing/subscriptions' : 'https://api-m.sandbox.paypal.com/v1/billing/subscriptions'
+  const url = isProd
+    ? 'https://api-m.paypal.com/v1/billing/subscriptions'
+    : 'https://api-m.sandbox.paypal.com/v1/billing/subscriptions'
 
   const response = await fetch(url, {
     method: 'POST',
@@ -78,10 +66,12 @@ export async function createSubscription(planId: string, workspaceId: string) {
 /**
  * Verify PayPal Webhook Signature
  */
-export async function verifyWebhookSignature(body: string, headers: any) {
+export async function verifyWebhookSignature(body: string, headers: Record<string, string | string[] | undefined>) {
   const accessToken = await getAccessToken()
   const isProd = process.env.NODE_ENV === 'production'
-  const url = isProd ? 'https://api-m.paypal.com/v1/notifications/verify-webhook-signature' : 'https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature'
+  const url = isProd
+    ? 'https://api-m.paypal.com/v1/notifications/verify-webhook-signature'
+    : 'https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature'
 
   const response = await fetch(url, {
     method: 'POST',
@@ -100,6 +90,6 @@ export async function verifyWebhookSignature(body: string, headers: any) {
     })
   })
 
-  const result = await response.json()
+  const result = await response.json() as { verification_status: string }
   return result.verification_status === 'SUCCESS'
 }

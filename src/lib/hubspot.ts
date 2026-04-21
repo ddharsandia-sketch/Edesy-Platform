@@ -18,11 +18,10 @@ interface CallSyncPayload {
 /**
  * After every completed call:
  * 1. Find or create a HubSpot contact by phone number
- * 2. Log the call as a HubSpot engagement with full transcript
- * 3. Update the contact's last_ai_agent field
+ * 2. Log the call as a HubSpot Call object (v3 CRM API)
+ * 3. Associate it with the contact
  *
- * This is entirely non-blocking — failures are logged but do not
- * affect the post-call processing job or the caller experience.
+ * Non-blocking — failures are logged but do not affect the post-call job.
  */
 export async function syncCallToHubspot(payload: CallSyncPayload) {
   if (!process.env.HUBSPOT_ACCESS_TOKEN) return
@@ -66,44 +65,42 @@ export async function syncCallToHubspot(payload: CallSyncPayload) {
       console.log(`[HUBSPOT] Created contact ${contactId} for ${payload.callerNumber}`)
     }
 
-    // ── Step 2: Log call as engagement ───────────────────────────────────────
+    // ── Step 2: Log call using v3 CRM Objects API (crm.objects.calls) ────────
+    // Note: crm.engagements was deprecated in HubSpot API v3+
     const sentimentLabel = payload.sentiment > 0.3 ? '😊 Positive'
       : payload.sentiment < -0.3 ? '😠 Negative'
       : '😐 Neutral'
 
-    await hubspot.crm.engagements.basicApi.create({
-      engagement: {
-        active: true,
-        type: 'CALL' as any,
-        timestamp: Date.now(),
-      },
-      associations: {
-        contactIds: [parseInt(contactId)],
-        companyIds: [],
-        dealIds: [],
-        ownerIds: [],
-        ticketIds: [],
-      },
-      metadata: {
-        body: [
-          `AI Agent: ${payload.agentName}`,
-          `Duration: ${Math.floor(payload.duration / 60)}m ${payload.duration % 60}s`,
-          `Sentiment: ${sentimentLabel} (score: ${payload.sentiment.toFixed(2)})`,
-          ``,
-          `SUMMARY:`,
-          payload.summary,
-          ``,
-          `TRANSCRIPT:`,
-          payload.transcript.slice(0, 3000),
-        ].join('\n'),
-        durationMilliseconds: payload.duration * 1000,
-        status: 'COMPLETED',
-        disposition: payload.sentiment > 0.3 ? 'CONNECTED' : 'LEFT_MESSAGE',
-        recordingUrl: null,
-        toNumber: payload.callerNumber,
-        fromNumber: '',
+    const callBody = [
+      `AI Agent: ${payload.agentName}`,
+      `Duration: ${Math.floor(payload.duration / 60)}m ${payload.duration % 60}s`,
+      `Sentiment: ${sentimentLabel} (score: ${payload.sentiment.toFixed(2)})`,
+      ``,
+      `SUMMARY:`,
+      payload.summary,
+      ``,
+      `TRANSCRIPT:`,
+      payload.transcript.slice(0, 3000),
+    ].join('\n')
+
+    const callObject = await hubspot.crm.objects.calls.basicApi.create({
+      properties: {
+        hs_call_body: callBody,
+        hs_call_duration: String(payload.duration * 1000),
+        hs_call_status: 'COMPLETED',
+        hs_call_direction: 'INBOUND',
+        hs_timestamp: String(Date.now()),
       }
     })
+
+    // Associate call with contact using v4 Associations API
+    await hubspot.crm.associations.v4.basicApi.create(
+      'calls',
+      callObject.id,
+      'contacts',
+      contactId,
+      [{ associationCategory: 'HUBSPOT_DEFINED' as any, associationTypeId: 194 }]
+    )
 
     console.log(`[HUBSPOT] ✅ Call logged for contact ${contactId}`)
 

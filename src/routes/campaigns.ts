@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { parse } from 'csv-parse/sync'
 import { prisma } from '../lib/prisma'
+import { Prisma } from '@prisma/client'
 import { requireAuth } from '../middleware/auth'
 import { campaignQueue } from '../jobs/campaign-dialer'
 
@@ -97,7 +98,7 @@ export async function campaignRoutes(app: FastifyInstance) {
       campaignId: string
       phoneNumber: string
       name: string | null
-      metadata: object | null
+      metadata: Prisma.InputJsonValue | typeof Prisma.JsonNull
     }> = []
     const errors: string[] = []
 
@@ -121,7 +122,7 @@ export async function campaignRoutes(app: FastifyInstance) {
         campaignId: id,
         phoneNumber: cleaned,
         name: name || Name || null,
-        metadata: Object.keys(rest).length > 0 ? rest : null,
+        metadata: Object.keys(rest).length > 0 ? rest as Prisma.InputJsonValue : Prisma.JsonNull,
       })
     }
 

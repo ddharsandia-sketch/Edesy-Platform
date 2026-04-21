@@ -1,5 +1,4 @@
 import twilio from 'twilio'
-import { RestClient as SignalWireClient } from '@signalwire/compatibility-api'
 
 export type TelephonyProvider = 'twilio' | 'signalwire' | 'exotel'
 
@@ -31,6 +30,8 @@ export class TelephonyManager {
     console.log(`[TELEPHONY] Making ${this.provider} call to ${params.to}`)
 
     if (this.provider === 'signalwire') {
+      // Dynamic import to avoid TS2307 when @signalwire/compatibility-api types are missing
+      const { RestClient: SignalWireClient } = await import('@signalwire/compatibility-api' as any)
       const client = SignalWireClient(
         process.env.SIGNALWIRE_PROJECT_ID!,
         process.env.SIGNALWIRE_API_TOKEN!,
@@ -42,10 +43,9 @@ export class TelephonyManager {
         from: params.from,
       })
       return { callSid: call.sid }
-    } 
-    
+    }
+
     if (this.provider === 'exotel') {
-      // Exotel integration (API based, not XML compatible like SignalWire)
       const apiKey = process.env.EXOTEL_API_KEY
       const apiToken = process.env.EXOTEL_API_TOKEN
       const sid = process.env.EXOTEL_ACCOUNT_SID
@@ -66,8 +66,8 @@ export class TelephonyManager {
           StatusCallback: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/exotel/status`
         })
       })
-      
-      const data = await res.json()
+
+      const data = await res.json() as { Call: { Sid: string } }
       return { callSid: data.Call.Sid }
     }
 
@@ -85,7 +85,6 @@ export class TelephonyManager {
    * Generate TwiML/compatible XML
    */
   generateConnectXml(roomName: string, token: string): string {
-    // Both Twilio and SignalWire support <Connect><Stream>
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
