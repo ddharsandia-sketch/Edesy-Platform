@@ -1,12 +1,11 @@
 import { Queue, Worker } from 'bullmq'
-import { Redis } from 'ioredis'
 import pLimit from 'p-limit'
 import { prisma } from '../lib/prisma'
+import { redis } from '../lib/redis'
 
-const redisConnection = new Redis(process.env.REDIS_URL!, {
-  maxRetriesPerRequest: null,
-  tls: process.env.REDIS_URL?.startsWith('rediss://') ? {} : undefined,
-})
+// Use shared Redis connection for BullMQ
+const redisConnection = redis.duplicate()
+redisConnection.options.maxRetriesPerRequest = null
 
 export const campaignQueue = new Queue('campaign-dialer', {
   connection: redisConnection,
@@ -114,7 +113,7 @@ async function dialContact(campaign: any, contact: any) {
       throw new Error(`API returned ${response.status}: ${await response.text()}`)
     }
 
-    const result = await response.json()
+    const result: { callId?: string } = await response.json() as any
 
     await prisma.campaignContact.update({
       where: { id: contact.id },
