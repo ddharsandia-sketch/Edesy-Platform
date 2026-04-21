@@ -17,6 +17,7 @@ model Workspace {
   paypalPayerId        String?  @unique
   planTier             String   @default("free")
   planExpiresAt        DateTime?
+  onboardingComplete   Boolean  @default(false)
   createdAt DateTime @default(now())
   agents    Agent[]
   calls     Call[]
@@ -24,6 +25,28 @@ model Workspace {
   webhooks  Webhook[]
   phoneNumbers PhoneNumber[]
   campaigns Campaign[]
+  providerCredentials ProviderCredentials?
+}
+
+model ProviderCredentials {
+  id          String   @id @default(uuid())
+  workspaceId String   @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // LLM Keys
+  openaiKey   String?
+  groqKey     String?
+  cerebrasKey String?
+  // Telephony Keys
+  twilioSid   String?
+  twilioToken String?
+  exotelSid   String?
+  exotelKey   String?
+  exotelToken String?
+  // Active providers
+  activeLlm    String @default("openai")  // "openai" | "groq" | "cerebras"
+  activeTel    String @default("twilio")  // "twilio" | "exotel"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model Agent {
@@ -32,7 +55,8 @@ model Agent {
   workspace       Workspace @relation(fields: [workspaceId], references: [id])
   name            String
   personaPrompt   String   @db.Text
-  language        String   @default("en")  // "en" | "hi" | "ta" | "te" | "bn" | "ml"
+  templateId      String?  // Slug of the template used to create this agent
+  language        String   @default("en")  // "en" | "hi" | "ta" | "te" | "bn" | "ml" | "gu"
   voiceProvider   String   @default("cartesia")  // "cartesia" | "elevenlabs" | "azure"
   voiceId         String   @default("71a7ad14-091c-4e8e-a314-022ece01c121")
   sttProvider     String   @default("deepgram")   // "deepgram" | "google_chirp" | "sarvam"

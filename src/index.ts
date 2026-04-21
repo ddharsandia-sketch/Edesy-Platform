@@ -29,6 +29,7 @@ import { knowledgeRoutes } from './routes/knowledge'
 import { webhookRoutes } from './routes/webhooks'
 import { billingRoutes } from './routes/billing'
 import { campaignRoutes } from './routes/campaigns'
+import { settingsRoutes } from './routes/settings'
 
 const app = Fastify({ logger: true })
 
@@ -72,6 +73,7 @@ app.register(callRoutes)
 app.register(knowledgeRoutes)
 app.register(billingRoutes)
 app.register(campaignRoutes)
+app.register(settingsRoutes)
 
 // Webhooks: Stripe needs rawBody, Twilio needs no parsing — register last
 app.register(webhookRoutes)
