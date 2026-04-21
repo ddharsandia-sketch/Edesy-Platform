@@ -4,6 +4,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Workspace {
@@ -92,6 +93,10 @@ model Call {
   twilioCallSid   String?   // Maps Twilio calls to our DB records
   startTime      DateTime @default(now())
   endTime        DateTime?
+
+  @@index([workspaceId, startTime])
+  @@index([twilioCallSid])
+  @@index([agentId, startTime])
 }
 
 model ApiKey {
@@ -148,4 +153,7 @@ model CampaignContact {
   lastAttempt DateTime?
   createdAt   DateTime  @default(now())
   campaign    Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@index([phoneNumber])
 }
