@@ -4,6 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "dev": "nodemon src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -15,6 +21,7 @@
     "@fastify/formbody": "^8.0.2",
     "@fastify/jwt": "^10.0.0",
     "@fastify/multipart": "^10.0.0",
+    "@fastify/rate-limit": "^10.3.0",
     "@hubspot/api-client": "^13.5.0",
     "@paypal/checkout-server-sdk": "^1.0.3",
     "@paypal/payouts-sdk": "^1.1.1",
@@ -42,8 +49,14 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
     "dotenv-cli": "^11.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
     "nodemon": "^3.1.14",
+    "prettier": "^3.8.3",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }

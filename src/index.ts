@@ -1,3 +1,9 @@
+import dotenv from 'dotenv'
+dotenv.config({ path: '../../.env' })
+
+// Validate environment variables before anything else
+import './lib/env'
+
 import * as Sentry from '@sentry/node'
 
 // Initialize Sentry before everything else
@@ -15,7 +21,7 @@ import rawBody from 'fastify-raw-body'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import multipart from '@fastify/multipart'
-import dotenv from 'dotenv'
+import rateLimit from '@fastify/rate-limit'
 import { authRoutes } from './routes/auth'
 import { agentRoutes } from './routes/agents'
 import { callRoutes } from './routes/calls'
@@ -23,8 +29,6 @@ import { knowledgeRoutes } from './routes/knowledge'
 import { webhookRoutes } from './routes/webhooks'
 import { billingRoutes } from './routes/billing'
 import { campaignRoutes } from './routes/campaigns'
-
-dotenv.config({ path: '../../.env' })
 
 const app = Fastify({ logger: true })
 
@@ -38,9 +42,28 @@ app.register(rawBody, {
   runFirst: true,
 })
 
-app.register(cors, { origin: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000', credentials: true })
+app.register(cors, {
+  origin: [
+    'https://voxpilot-app.vercel.app',
+    'https://voxpilot-ai.vercel.app',
+    'https://edesy-mkc.vercel.app',
+    ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL] : [])
+  ],
+  credentials: true
+})
 app.register(jwt, { secret: process.env.JWT_SECRET! })
 app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } }) // 50MB max
+
+// Rate limiting - 100 requests per minute per IP
+app.register(rateLimit, {
+  max: 100,
+  timeWindow: 60000,
+  keyGenerator: (request) => request.ip,
+  errorResponseBuilder: () => ({
+    error: 'Too many requests',
+    message: 'Rate limit exceeded. Please try again later.'
+  })
+})
 
 // Register all routes
 app.register(authRoutes)
