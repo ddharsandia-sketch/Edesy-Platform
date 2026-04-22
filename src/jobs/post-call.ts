@@ -4,6 +4,7 @@ import { redis } from '../lib/redis'
 import OpenAI from 'openai'
 import Stripe from 'stripe'
 import { fireCrmWebhooks } from '../lib/crm'
+import { cerebrasClient } from '../lib/ai'
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-03-25.dahlia' as any })
 
@@ -45,24 +46,36 @@ export const postCallWorker = new Worker('post-call', async (job) => {
     .map(t => `${t.role.toUpperCase()}: ${t.text}`)
     .join('\n')
 
-  // ── Step 1: Compute sentiment score (-1.0 to 1.0) ────────────────────────
+  // ── Step 1: Compute Insights with Cerebras (Instant) ────────────────────
   let sentimentScore = 0.0
+  let summary = ''
+  let actionItems: string[] = []
+  
   try {
-    const sentimentRes = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      response_format: { type: 'json_object' },
+    const insightsRes = await cerebrasClient.chat.completions.create({
+      model: 'llama3.1-8b',
       messages: [{
         role: 'system',
-        content: 'Analyze the sentiment of this call transcript. Return JSON: {"score": number between -1.0 (very negative) and 1.0 (very positive), "label": "positive"|"neutral"|"negative", "reason": "one sentence"}'
+        content: `Analyze this call transcript. Return ONLY a raw JSON object (no markdown, no quotes) with these exact keys:
+{
+  "score": <number between -1.0 (very negative) and 1.0 (very positive)>,
+  "label": <"positive"|"neutral"|"negative">,
+  "summary": <"A 2-sentence summary of what happened">,
+  "actionItems": [<array of strings of agreed next steps>]
+}`
       }, {
         role: 'user',
-        content: transcriptText
-      }]
+        content: transcriptText.slice(0, 4000) // Cap to save context
+      }],
+      temperature: 0.1
     })
-    const parsed = JSON.parse(sentimentRes.choices[0].message.content || '{}')
+
+    const parsed = JSON.parse(insightsRes.choices[0].message.content || '{}')
     sentimentScore = parsed.score ?? 0.0
+    summary = parsed.summary ?? ''
+    actionItems = parsed.actionItems ?? []
   } catch (err) {
-    console.warn(`[POST-CALL] Sentiment scoring failed for ${callId}:`, err)
+    console.warn(`[POST-CALL] Cerebras insights generation failed for ${callId}:`, err)
   }
 
   // ── Step 2: Compute call duration ─────────────────────────────────────────
@@ -74,24 +87,6 @@ export const postCallWorker = new Worker('post-call', async (job) => {
   const durationMinutes = durationSeconds / 60
   // Blended estimate: $0.05/min average across STT + LLM + TTS + Telephony
   const estimatedCostUsd = parseFloat((durationMinutes * 0.05).toFixed(4))
-
-  // ── Step 4: Generate call summary ─────────────────────────────────────────
-  let summary = ''
-  try {
-    const summaryRes = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{
-        role: 'system',
-        content: 'Summarize this call in 2 sentences max. Include: what the caller needed, and how it was resolved (or not).'
-      }, {
-        role: 'user',
-        content: transcriptText.slice(0, 3000)  // Cap at 3000 chars to save tokens
-      }]
-    })
-    summary = summaryRes.choices[0].message.content || ''
-  } catch (err) {
-    console.warn(`[POST-CALL] Summary generation failed for ${callId}:`, err)
-  }
 
   // ── Step 5: Save everything to DB ─────────────────────────────────────────
   await prisma.call.update({
@@ -131,7 +126,29 @@ export const postCallWorker = new Worker('post-call', async (job) => {
     }
   }
 
-  // ── Step 7: Fire CRM webhooks (if configured for this workspace) ──────────
+  // ── Step 7: Fire all workspace integrations (HubSpot, Sheets, Slack, Notion, etc.) ───
+  try {
+    const { triggerIntegrations } = await import('../lib/integrations')
+    await triggerIntegrations(call.workspaceId, {
+      callId:          call.id,
+      callerNumber:    call.callerNumber,
+      callerName:      undefined,
+      agentName:       call.agent?.name || 'AI Agent',
+      agentId:         call.agentId,
+      durationSeconds: durationSeconds,
+      sentiment:       sentimentScore,
+      summary:         summary,
+      transcript:      transcriptText,
+      direction:       call.direction,
+      cost:            estimatedCostUsd,
+      language:        call.agent?.language || 'en',
+      startTime:       call.startTime,
+    })
+  } catch (err) {
+    console.warn(`[POST-CALL] Integrations trigger failed for ${callId}:`, err)
+  }
+
+  // ── Step 8: Fire legacy CRM webhooks (backwards compat) ──────────────────
   try {
     await fireCrmWebhooks(call.workspaceId, {
       callId,

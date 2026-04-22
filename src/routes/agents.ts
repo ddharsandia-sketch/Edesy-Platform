@@ -27,6 +27,7 @@ export async function agentRoutes(app: FastifyInstance) {
       sttProvider: string
       llmModel: string
       useGeminiLive: boolean
+      extractionSchema?: string | object
     }
 
     // Validate: personaPrompt must be at least 50 characters
@@ -37,8 +38,23 @@ export async function agentRoutes(app: FastifyInstance) {
       })
     }
 
+    let parsedSchema = null
+    if (body.extractionSchema) {
+      try {
+        parsedSchema = typeof body.extractionSchema === 'string' 
+          ? JSON.parse(body.extractionSchema) 
+          : body.extractionSchema
+      } catch {
+        return reply.code(400).send({ error: 'Invalid extraction schema JSON' })
+      }
+    }
+
     const agent = await prisma.agent.create({
-      data: { ...body, workspaceId }
+      data: { 
+        ...body, 
+        workspaceId,
+        extractionSchema: parsedSchema ?? undefined
+      }
     })
 
     // Prefetch greeting audio into Redis (non-blocking — failure is safe)
@@ -56,12 +72,29 @@ export async function agentRoutes(app: FastifyInstance) {
       personaPrompt: string
       language: string
       voiceId: string
+      extractionSchema: string | object
     }>
 
     const existing = await prisma.agent.findFirst({ where: { id, workspaceId } })
     if (!existing) return reply.code(404).send({ error: 'Agent not found' })
 
-    const updated = await prisma.agent.update({ where: { id }, data: body })
+    let parsedSchema = undefined
+    if (body.extractionSchema) {
+      try {
+        parsedSchema = typeof body.extractionSchema === 'string' 
+          ? JSON.parse(body.extractionSchema) 
+          : body.extractionSchema
+      } catch {
+        return reply.code(400).send({ error: 'Invalid extraction schema JSON' })
+      }
+    }
+
+    const dataToUpdate: any = { ...body }
+    if (parsedSchema !== undefined) {
+      dataToUpdate.extractionSchema = parsedSchema
+    }
+
+    const updated = await prisma.agent.update({ where: { id }, data: dataToUpdate })
     return reply.send(updated)
   })
 

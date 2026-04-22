@@ -26,6 +26,7 @@ model Workspace {
   phoneNumbers PhoneNumber[]
   campaigns Campaign[]
   providerCredentials ProviderCredentials?
+  integrations Integration[]
 }
 
 model ProviderCredentials {
@@ -61,6 +62,7 @@ model Agent {
   voiceId         String   @default("71a7ad14-091c-4e8e-a314-022ece01c121")
   sttProvider     String   @default("deepgram")   // "deepgram" | "google_chirp" | "sarvam"
   llmModel        String   @default("gpt-4o-mini")
+  extractionSchema Json?   // Added for structured data extraction
   useGeminiLive   Boolean  @default(false)  // Native S2S ultra-low latency mode
   greetingAudio   Bytes?   // Prefetched greeting audio bytes stored in DB
   industry        String   @default("general")   // For compliance guard
@@ -161,6 +163,36 @@ model Campaign {
   workspace      Workspace @relation(fields: [workspaceId], references: [id])
   agent          Agent    @relation(fields: [agentId], references: [id])
   contacts       CampaignContact[]
+}
+
+model AgentTemplate {
+  id                String   @id @default(cuid())
+  name              String
+  category          String
+  llmModel          String
+  sttProvider       String
+  ttsProvider       String
+  voiceId           String
+  telephonyProvider String
+  language          String
+  description       String
+  isBuiltIn         Boolean  @default(true)
+  createdAt         DateTime @default(now())
+}
+
+model Integration {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  type         String
+  label        String
+  apiKey       String
+  config       Json?
+  enabled      Boolean   @default(true)
+  lastTestedAt DateTime?
+  lastTestOk   Boolean?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model CampaignContact {
