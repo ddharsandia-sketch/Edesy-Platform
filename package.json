@@ -1,0 +1,8 @@
+{
+  "name": "voice-ai-platform",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
