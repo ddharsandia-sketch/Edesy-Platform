@@ -27,8 +27,23 @@ async function agentRoutes(app) {
                 error: 'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
             });
         }
+        let parsedSchema = null;
+        if (body.extractionSchema) {
+            try {
+                parsedSchema = typeof body.extractionSchema === 'string'
+                    ? JSON.parse(body.extractionSchema)
+                    : body.extractionSchema;
+            }
+            catch {
+                return reply.code(400).send({ error: 'Invalid extraction schema JSON' });
+            }
+        }
         const agent = await prisma_1.prisma.agent.create({
-            data: { ...body, workspaceId }
+            data: {
+                ...body,
+                workspaceId,
+                extractionSchema: parsedSchema ?? undefined
+            }
         });
         // Prefetch greeting audio into Redis (non-blocking — failure is safe)
         await prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider);
@@ -42,7 +57,22 @@ async function agentRoutes(app) {
         const existing = await prisma_1.prisma.agent.findFirst({ where: { id, workspaceId } });
         if (!existing)
             return reply.code(404).send({ error: 'Agent not found' });
-        const updated = await prisma_1.prisma.agent.update({ where: { id }, data: body });
+        let parsedSchema = undefined;
+        if (body.extractionSchema) {
+            try {
+                parsedSchema = typeof body.extractionSchema === 'string'
+                    ? JSON.parse(body.extractionSchema)
+                    : body.extractionSchema;
+            }
+            catch {
+                return reply.code(400).send({ error: 'Invalid extraction schema JSON' });
+            }
+        }
+        const dataToUpdate = { ...body };
+        if (parsedSchema !== undefined) {
+            dataToUpdate.extractionSchema = parsedSchema;
+        }
+        const updated = await prisma_1.prisma.agent.update({ where: { id }, data: dataToUpdate });
         return reply.send(updated);
     });
     // DELETE /agents/:id

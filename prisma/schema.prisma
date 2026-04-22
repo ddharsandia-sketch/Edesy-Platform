@@ -7,117 +7,113 @@ datasource db {
 }
 
 model Workspace {
-  id        String   @id @default(uuid())
-  name      String
-  ownerId   String
-  plan      String   @default("free")  // "free" | "pro" | "enterprise"
-  stripeCustomerId     String?  @unique
-  stripeSubscriptionId String?  @unique
-  paypalSubscriptionId String?  @unique
-  paypalPayerId        String?  @unique
-  planTier             String   @default("free")
+  id                   String               @id @default(uuid())
+  name                 String
+  ownerId              String
+  plan                 String               @default("free")
+  createdAt            DateTime             @default(now())
   planExpiresAt        DateTime?
-  onboardingComplete   Boolean  @default(false)
-  createdAt DateTime @default(now())
-  agents    Agent[]
-  calls     Call[]
-  apiKeys   ApiKey[]
-  webhooks  Webhook[]
-  phoneNumbers PhoneNumber[]
-  campaigns Campaign[]
-  providerCredentials ProviderCredentials?
-  integrations Integration[]
+  planTier             String               @default("free")
+  stripeCustomerId     String?              @unique
+  stripeSubscriptionId String?              @unique
+  onboardingComplete   Boolean              @default(false)
+  paypalPayerId        String?              @unique
+  paypalSubscriptionId String?              @unique
+  agents               Agent[]
+  apiKeys              ApiKey[]
+  calls                Call[]
+  campaigns            Campaign[]
+  integrations         Integration[]
+  phoneNumbers         PhoneNumber[]
+  providerCredentials  ProviderCredentials?
+  webhooks             Webhook[]
 }
 
 model ProviderCredentials {
-  id          String   @id @default(uuid())
-  workspaceId String   @unique
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  // LLM Keys
+  id          String    @id @default(uuid())
+  workspaceId String    @unique
   openaiKey   String?
   groqKey     String?
   cerebrasKey String?
-  // Telephony Keys
   twilioSid   String?
   twilioToken String?
   exotelSid   String?
   exotelKey   String?
   exotelToken String?
-  // Active providers
-  activeLlm    String @default("openai")  // "openai" | "groq" | "cerebras"
-  activeTel    String @default("twilio")  // "twilio" | "exotel"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  activeLlm   String    @default("openai")
+  activeTel   String    @default("twilio")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model Agent {
-  id              String   @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace @relation(fields: [workspaceId], references: [id])
-  name            String
-  personaPrompt   String   @db.Text
-  templateId      String?  // Slug of the template used to create this agent
-  language        String   @default("en")  // "en" | "hi" | "ta" | "te" | "bn" | "ml" | "gu"
-  voiceProvider   String   @default("cartesia")  // "cartesia" | "elevenlabs" | "azure"
-  voiceId         String   @default("71a7ad14-091c-4e8e-a314-022ece01c121")
-  sttProvider     String   @default("deepgram")   // "deepgram" | "google_chirp" | "sarvam"
-  llmModel        String   @default("gpt-4o-mini")
-  extractionSchema Json?   // Added for structured data extraction
-  useGeminiLive   Boolean  @default(false)  // Native S2S ultra-low latency mode
-  greetingAudio   Bytes?   // Prefetched greeting audio bytes stored in DB
-  industry        String   @default("general")   // For compliance guard
-  handoffPhone    String?                         // Transfer target on violations
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  calls           Call[]
-  knowledgeDocs   KnowledgeDoc[]
-  phoneNumbers    PhoneNumber[]
-  campaigns       Campaign[]
+  id               String         @id @default(uuid())
+  workspaceId      String
+  name             String
+  personaPrompt    String
+  language         String         @default("en")
+  voiceProvider    String         @default("cartesia")
+  voiceId          String         @default("71a7ad14-091c-4e8e-a314-022ece01c121")
+  sttProvider      String         @default("deepgram")
+  llmModel         String         @default("gpt-4o-mini")
+  useGeminiLive    Boolean        @default(false)
+  greetingAudio    Bytes?
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  handoffPhone     String?
+  industry         String         @default("general")
+  templateId       String?
+  extractionSchema Json?
+  workspace        Workspace      @relation(fields: [workspaceId], references: [id])
+  calls            Call[]
+  campaigns        Campaign[]
+  knowledgeDocs    KnowledgeDoc[]
+  phoneNumbers     PhoneNumber[]
 }
 
 model KnowledgeDoc {
-  id          String   @id @default(uuid())
-  agentId     String
-  agent       Agent    @relation(fields: [agentId], references: [id])
-  fileName    String
-  fileType    String   // "pdf" | "url" | "text"
-  content     String   @db.Text
-  embedded    Boolean  @default(false)
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  agentId   String
+  fileName  String
+  fileType  String
+  content   String
+  embedded  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id])
 }
 
 model PhoneNumber {
-  id          String   @id @default(uuid())
-  number      String   @unique   // E.164 format: +14155551234
-  provider    String   @default("twilio")
+  id          String    @id @default(uuid())
   agentId     String
+  number      String    @unique
+  provider    String    @default("twilio")
+  region      String?
+  createdAt   DateTime  @default(now())
   workspaceId String
-  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent       Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
   workspace   Workspace @relation(fields: [workspaceId], references: [id])
-  region      String?  // "us" | "india" | "global" - made optional to not break existing data
-  createdAt   DateTime @default(now())
 }
 
 model Call {
-  id             String   @id @default(uuid())
-  workspaceId    String
-  workspace      Workspace @relation(fields: [workspaceId], references: [id])
-  agentId        String
-  agent          Agent    @relation(fields: [agentId], references: [id])
-  callerNumber   String
-  direction      String   // "inbound" | "outbound"
-  status         String   @default("dialing")
-  // Status options: "dialing" | "connected" | "handling_objection" | "extracting_data" | "completed" | "failed" | "transferred"
-  transcript     Json     @default("[]")
-  sentiment      Float?   // -1.0 to 1.0
-  duration       Int?     // seconds
-  costUsd        Float?
-  artifact       Json?    // Structured data extracted from call (booking, order, complaint)
-  supervisorNotes Json    @default("[]")  // All supervisor injections logged
-  liveKitRoomId  String?
-  twilioCallSid   String?   // Maps Twilio calls to our DB records
-  startTime      DateTime @default(now())
-  endTime        DateTime?
+  id              String    @id @default(uuid())
+  workspaceId     String
+  agentId         String
+  callerNumber    String
+  direction       String
+  status          String    @default("dialing")
+  transcript      Json      @default("[]")
+  sentiment       Float?
+  duration        Int?
+  costUsd         Float?
+  artifact        Json?
+  supervisorNotes Json      @default("[]")
+  liveKitRoomId   String?
+  startTime       DateTime  @default(now())
+  endTime         DateTime?
+  twilioCallSid   String?
+  agent           Agent     @relation(fields: [agentId], references: [id])
+  workspace       Workspace @relation(fields: [workspaceId], references: [id])
 
   @@index([workspaceId, startTime])
   @@index([twilioCallSid])
@@ -125,43 +121,42 @@ model Call {
 }
 
 model ApiKey {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id])
-  key         String   @unique  // Format: "vak_" + random 32 chars
+  key         String    @unique
   name        String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   lastUsed    DateTime?
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
 }
 
 model Webhook {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id])
   url         String
-  secret      String?  // For HMAC signatures
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
+  secret      String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
 }
 
 model Campaign {
-  id             String   @id @default(cuid())
+  id             String            @id @default(cuid())
   workspaceId    String
   agentId        String
   name           String
-  status         String   @default("draft")
-  // "draft" | "scheduled" | "running" | "paused" | "completed" | "failed"
-  callsPerMinute Int      @default(2)
-  maxRetries     Int      @default(1)
+  status         String            @default("draft")
+  callsPerMinute Int               @default(2)
+  maxRetries     Int               @default(1)
   scheduledAt    DateTime?
   completedAt    DateTime?
-  totalContacts  Int      @default(0)
-  calledCount    Int      @default(0)
-  answeredCount  Int      @default(0)
-  convertedCount Int      @default(0)
-  createdAt      DateTime @default(now())
-  workspace      Workspace @relation(fields: [workspaceId], references: [id])
-  agent          Agent    @relation(fields: [agentId], references: [id])
+  totalContacts  Int               @default(0)
+  calledCount    Int               @default(0)
+  answeredCount  Int               @default(0)
+  convertedCount Int               @default(0)
+  createdAt      DateTime          @default(now())
+  agent          Agent             @relation(fields: [agentId], references: [id])
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id])
   contacts       CampaignContact[]
 }
 
@@ -202,7 +197,6 @@ model CampaignContact {
   name        String?
   metadata    Json?
   status      String    @default("pending")
-  // "pending" | "calling" | "answered" | "failed" | "converted" | "do_not_call"
   callId      String?
   attempts    Int       @default(0)
   lastAttempt DateTime?

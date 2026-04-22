@@ -63,6 +63,9 @@ const knowledge_1 = require("./routes/knowledge");
 const webhooks_1 = require("./routes/webhooks");
 const billing_1 = require("./routes/billing");
 const campaigns_1 = require("./routes/campaigns");
+const settings_1 = require("./routes/settings");
+const ai_1 = __importDefault(require("./routes/ai"));
+const integrations_1 = require("./routes/integrations");
 const app = (0, fastify_1.default)({ logger: true });
 // FIX 1: Register raw body BEFORE any routes — required for Stripe webhook signature verification
 // global: false means only routes with config: { rawBody: true } capture the raw buffer
@@ -74,9 +77,12 @@ app.register(fastify_raw_body_1.default, {
     runFirst: true,
 });
 app.register(cors_1.default, {
-    origin: process.env.NODE_ENV === 'production'
-        ? process.env.NEXT_PUBLIC_APP_URL
-        : ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: [
+        'https://voxpilot-app.vercel.app',
+        'https://voxpilot-ai.vercel.app',
+        'https://edesy-mkc.vercel.app',
+        ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL] : [])
+    ],
     credentials: true
 });
 app.register(jwt_1.default, { secret: process.env.JWT_SECRET });
@@ -98,6 +104,9 @@ app.register(calls_1.callRoutes);
 app.register(knowledge_1.knowledgeRoutes);
 app.register(billing_1.billingRoutes);
 app.register(campaigns_1.campaignRoutes);
+app.register(settings_1.settingsRoutes);
+app.register(ai_1.default, { prefix: '/ai' });
+app.register(integrations_1.integrationRoutes);
 // Webhooks: Stripe needs rawBody, Twilio needs no parsing — register last
 app.register(webhooks_1.webhookRoutes);
 app.get('/health', async () => ({ status: 'ok' }));
