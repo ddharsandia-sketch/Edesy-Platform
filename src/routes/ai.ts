@@ -2,7 +2,10 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { generateMagicPrompt, generateSchema } from '../lib/ai';
 
-export default async function aiRoutes(fastify: FastifyInstance) {
+export async function aiRoutes(fastify: FastifyInstance) {
+  // Simple health check for the /ai prefix
+  fastify.get('/health', async () => ({ status: 'ai-ok' }));
+
   // Magic Prompt Generator (Groq)
   fastify.post('/magic-prompt', {
     schema: {

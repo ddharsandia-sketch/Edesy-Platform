@@ -59,7 +59,7 @@ export async function agentRoutes(app: FastifyInstance) {
     })
 
     // Prefetch greeting audio into Redis (non-blocking — failure is safe)
-    await prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider)
+    prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider)
 
     return reply.code(201).send(agent)
   })
@@ -268,7 +268,8 @@ async function prefetchGreeting(
   voiceProvider: string
 ) {
   try {
-    const response = await fetch('http://localhost:8000/prefetch-greeting', {
+    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const response = await fetch(`${workerUrl}/prefetch-greeting`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

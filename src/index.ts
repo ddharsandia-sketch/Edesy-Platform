@@ -30,7 +30,7 @@ import { webhookRoutes } from './routes/webhooks'
 import { billingRoutes } from './routes/billing'
 import { campaignRoutes } from './routes/campaigns'
 import { settingsRoutes } from './routes/settings'
-import aiRoutes from './routes/ai'
+import { aiRoutes } from './routes/ai'
 import { integrationRoutes } from './routes/integrations'
 
 const app = Fastify({ logger: true })
