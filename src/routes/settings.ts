@@ -1,11 +1,11 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
-import { authenticate } from '../middleware/auth'
+import { requireAuth } from '../middleware/auth'
 
 export async function settingsRoutes(app: FastifyInstance) {
 
   // GET /settings/providers — fetch current provider credentials (keys masked)
-  app.get('/settings/providers', { preHandler: [authenticate] }, async (request, reply) => {
+  app.get('/settings/providers', { preHandler: [requireAuth] }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
     const creds = await prisma.providerCredentials.findUnique({ where: { workspaceId } })
     if (!creds) return reply.send({ configured: false })
@@ -29,7 +29,7 @@ export async function settingsRoutes(app: FastifyInstance) {
   })
 
   // POST /settings/providers — save/update provider credentials
-  app.post('/settings/providers', { preHandler: [authenticate] }, async (request, reply) => {
+  app.post('/settings/providers', { preHandler: [requireAuth] }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
     const body = request.body as {
       openaiKey?: string
@@ -65,14 +65,14 @@ export async function settingsRoutes(app: FastifyInstance) {
   })
 
   // POST /settings/complete-onboarding
-  app.post('/settings/complete-onboarding', { preHandler: [authenticate] }, async (request, reply) => {
+  app.post('/settings/complete-onboarding', { preHandler: [requireAuth] }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
     await prisma.workspace.update({ where: { id: workspaceId }, data: { onboardingComplete: true } })
     return reply.send({ success: true })
   })
 
   // GET /settings/onboarding-status
-  app.get('/settings/onboarding-status', { preHandler: [authenticate] }, async (request, reply) => {
+  app.get('/settings/onboarding-status', { preHandler: [requireAuth] }, async (request, reply) => {
     const { workspaceId } = request.user as { workspaceId: string }
     const ws = await prisma.workspace.findUnique({
       where: { id: workspaceId },
