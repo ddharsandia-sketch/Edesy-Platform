@@ -46,12 +46,7 @@ app.register(rawBody, {
 })
 
 app.register(cors, {
-  origin: [
-    'https://voxpilot-app.vercel.app',
-    'https://voxpilot-ai.vercel.app',
-    'https://edesy-mkc.vercel.app',
-    ...(process.env.NEXT_PUBLIC_APP_URL ? [process.env.NEXT_PUBLIC_APP_URL] : [])
-  ],
+  origin: true,
   credentials: true
 })
 app.register(jwt, { secret: process.env.JWT_SECRET! })
