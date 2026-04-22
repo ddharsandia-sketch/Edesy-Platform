@@ -45,7 +45,8 @@ export async function agentRoutes(app: FastifyInstance) {
           ? JSON.parse(body.extractionSchema) 
           : body.extractionSchema
       } catch {
-        return reply.code(400).send({ error: 'Invalid extraction schema JSON' })
+        // Invalid JSON in schema — ignore it and save without schema
+        parsedSchema = null
       }
     }
 
@@ -85,7 +86,8 @@ export async function agentRoutes(app: FastifyInstance) {
           ? JSON.parse(body.extractionSchema) 
           : body.extractionSchema
       } catch {
-        return reply.code(400).send({ error: 'Invalid extraction schema JSON' })
+        // Invalid JSON in schema — ignore and save without schema
+        parsedSchema = undefined
       }
     }
 

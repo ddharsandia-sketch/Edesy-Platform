@@ -1,74 +1,101 @@
 import OpenAI from 'openai';
 
-// We use the OpenAI SDK because both Groq and Cerebras offer OpenAI-compatible endpoints.
+// Groq (OpenAI-compatible) for Magic Prompt
 export const groqClient = new OpenAI({
-  apiKey: process.env.GLOBAL_GROQ_API_KEY,
+  apiKey: process.env.GLOBAL_GROQ_API_KEY || 'placeholder',
   baseURL: 'https://api.groq.com/openai/v1',
 });
 
+// Cerebras (OpenAI-compatible) for Schema Generation
 export const cerebrasClient = new OpenAI({
-  apiKey: process.env.GLOBAL_CEREBRAS_API_KEY,
+  apiKey: process.env.GLOBAL_CEREBRAS_API_KEY || 'placeholder',
   baseURL: 'https://api.cerebras.ai/v1',
 });
 
-// Helper for magic prompts
-export async function generateMagicPrompt(description: string): Promise<string> {
-  const response = await groqClient.chat.completions.create({
-    model: 'llama3-70b-8192',
-    messages: [
-      {
-        role: 'system',
-        content: `You are an expert AI Voice Agent Prompt Engineer. 
-Your job is to take a short description of an agent from a user and expand it into a highly structured, comprehensive system prompt for a voice AI agent.
-
-The prompt you output must include:
-1. **Identity & Persona**: Who the agent is, its tone, and style.
-2. **Primary Objective**: The main goal of the conversation.
-3. **Core Constraints**: What the agent MUST NOT do (e.g., don't hallucinate pricing, keep responses under 2 sentences, etc.).
-4. **Conversation Flow / Strategy**: How to guide the caller step by step.
-5. **Edge Cases**: How to handle off-topic questions, anger, or confusion.
-
-Keep the output professional and directly ready to be used as a system prompt. Do not include introductory text like "Here is your prompt", just output the prompt itself.`
-      },
-      {
-        role: 'user',
-        content: `Short description: ${description}`
-      }
-    ],
-    temperature: 0.7,
-    max_tokens: 1500,
+// Gemini REST API fallback (no SDK needed — uses googleapis key already in env)
+async function callGemini(prompt: string): Promise<string> {
+  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('No Gemini API key set');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
   });
-
-  return response.choices[0]?.message?.content?.trim() || '';
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`);
+  const data = await res.json() as any;
+  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
 }
 
-// Helper for schema generation
-export async function generateSchema(description: string): Promise<any> {
-  const response = await cerebrasClient.chat.completions.create({
-    model: 'llama3.1-8b', // You can use whichever cerebras model is preferred, assuming standard names
-    messages: [
-      {
-        role: 'system',
-        content: `You are an expert at generating strict JSON schemas for data extraction.
-The user will describe the data they want to extract from a conversation.
-You must output a valid JSON Schema object (Draft 7).
-Do NOT wrap the output in markdown code blocks like \`\`\`json. Just output the raw JSON object.
-Do NOT include any explanatory text.`
-      },
-      {
-        role: 'user',
-        content: `Description: ${description}`
-      }
-    ],
-    temperature: 0.1,
-    max_tokens: 1000,
-  });
+// ── Magic Prompt (Groq first, Gemini fallback) ───────────────────────────────
+export async function generateMagicPrompt(description: string): Promise<string> {
+  const systemMsg = `You are an expert AI Voice Agent Prompt Engineer. 
+Take the short description and expand it into a highly structured system prompt for a voice AI agent.
+Include:
+1. Identity & Persona (tone, style, name)
+2. Primary Objective (what to accomplish in the call)
+3. Core Constraints (what NOT to do)
+4. Conversation Flow (step-by-step guidance)
+5. Edge Cases (anger, off-topic, confusion)
+Output the prompt directly. No intro text. No markdown headers.`;
 
-  const raw = response.choices[0]?.message?.content?.trim() || '{}';
+  // Try Groq first
+  if (process.env.GLOBAL_GROQ_API_KEY) {
+    try {
+      const res = await groqClient.chat.completions.create({
+        model: 'llama3-70b-8192',
+        messages: [
+          { role: 'system', content: systemMsg },
+          { role: 'user', content: `Short description: ${description}` }
+        ],
+        temperature: 0.7,
+        max_tokens: 1500,
+      });
+      const text = res.choices[0]?.message?.content?.trim();
+      if (text) return text;
+    } catch (e) {
+      console.warn('[AI] Groq failed, using Gemini fallback:', (e as Error).message);
+    }
+  }
+
+  // Gemini fallback
+  return callGemini(`${systemMsg}\n\nShort description: ${description}`);
+}
+
+// ── Schema Generator (Cerebras first, Gemini fallback) ───────────────────────
+export async function generateSchema(description: string): Promise<any> {
+  const systemMsg = `Generate a valid JSON Schema (Draft 7) for data extraction based on the user description.
+Output ONLY the raw JSON object. No markdown fences, no explanatory text.`;
+
+  let raw = '{}';
+
+  // Try Cerebras first
+  if (process.env.GLOBAL_CEREBRAS_API_KEY) {
+    try {
+      const res = await cerebrasClient.chat.completions.create({
+        model: 'llama3.1-8b',
+        messages: [
+          { role: 'system', content: systemMsg },
+          { role: 'user', content: `Description: ${description}` }
+        ],
+        temperature: 0.1,
+        max_tokens: 1000,
+      });
+      raw = res.choices[0]?.message?.content?.trim() || '{}';
+    } catch (e) {
+      console.warn('[AI] Cerebras failed, using Gemini fallback:', (e as Error).message);
+      raw = await callGemini(`${systemMsg}\n\nDescription: ${description}`);
+    }
+  } else {
+    raw = await callGemini(`${systemMsg}\n\nDescription: ${description}`);
+  }
+
+  // Strip markdown fences if the model added them
+  const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
   try {
-    return JSON.parse(raw);
-  } catch (e) {
-    console.error("Failed to parse schema generated by Cerebras:", raw);
+    return JSON.parse(cleaned);
+  } catch {
+    console.error('[AI] Schema parse failed:', cleaned);
     return {};
   }
 }
