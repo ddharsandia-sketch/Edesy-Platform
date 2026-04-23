@@ -5,8 +5,10 @@ import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { redis } from '../lib/redis'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-03-25.dahlia' as any })
-
+let stripe: Stripe | null = null;
+if (process.env.STRIPE_SECRET_KEY) {
+  stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-03-25.dahlia' as any });
+}
 export async function webhookRoutes(app: FastifyInstance) {
   /**
    * POST /webhooks/twilio/inbound
@@ -239,6 +241,11 @@ export async function webhookRoutes(app: FastifyInstance) {
     if (!rawPayload) {
       console.error('[STRIPE] rawBody is missing — check fastify-raw-body registration order in index.ts')
       return reply.code(400).send('Missing raw body')
+    }
+
+    if (!stripe) {
+      console.error('[STRIPE] Cannot process webhook: STRIPE_SECRET_KEY is missing')
+      return reply.code(500).send('Stripe not configured')
     }
 
     let event: any
