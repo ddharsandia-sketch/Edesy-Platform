@@ -33,20 +33,23 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.default = aiRoutes;
+exports.aiRoutes = aiRoutes;
 const zod_1 = require("zod");
 const ai_1 = require("../lib/ai");
 async function aiRoutes(fastify) {
+    // Simple health check for the /ai prefix
+    fastify.get('/health', async () => ({ status: 'ai-ok' }));
     // Magic Prompt Generator (Groq)
-    fastify.post('/magic-prompt', {
-        schema: {
-            body: zod_1.z.object({
-                description: zod_1.z.string().min(5)
-            })
-        }
-    }, async (request, reply) => {
+    const MagicPromptSchema = zod_1.z.object({
+        description: zod_1.z.string().min(5)
+    });
+    fastify.post('/magic-prompt', async (request, reply) => {
         try {
-            const { description } = request.body;
+            const validation = MagicPromptSchema.safeParse(request.body);
+            if (!validation.success) {
+                return reply.status(400).send({ success: false, error: 'Invalid description' });
+            }
+            const { description } = validation.data;
             const enhancedPrompt = await (0, ai_1.generateMagicPrompt)(description);
             return reply.send({ success: true, enhancedPrompt });
         }
@@ -56,15 +59,16 @@ async function aiRoutes(fastify) {
         }
     });
     // Schema Generator (Cerebras)
-    fastify.post('/generate-schema', {
-        schema: {
-            body: zod_1.z.object({
-                description: zod_1.z.string().min(5)
-            })
-        }
-    }, async (request, reply) => {
+    const SchemaGeneratorSchema = zod_1.z.object({
+        description: zod_1.z.string().min(5)
+    });
+    fastify.post('/generate-schema', async (request, reply) => {
         try {
-            const { description } = request.body;
+            const validation = SchemaGeneratorSchema.safeParse(request.body);
+            if (!validation.success) {
+                return reply.status(400).send({ success: false, error: 'Invalid description' });
+            }
+            const { description } = validation.data;
             const schema = await (0, ai_1.generateSchema)(description);
             return reply.send({ success: true, schema });
         }
@@ -74,19 +78,20 @@ async function aiRoutes(fastify) {
         }
     });
     // Text-Based Simulation (Groq Streaming)
-    fastify.post('/simulate-chat', {
-        schema: {
-            body: zod_1.z.object({
-                agentId: zod_1.z.string(),
-                messages: zod_1.z.array(zod_1.z.object({
-                    role: zod_1.z.enum(['user', 'assistant', 'system']),
-                    content: zod_1.z.string()
-                }))
-            })
-        }
-    }, async (request, reply) => {
+    const SimulateChatSchema = zod_1.z.object({
+        agentId: zod_1.z.string(),
+        messages: zod_1.z.array(zod_1.z.object({
+            role: zod_1.z.enum(['user', 'assistant', 'system']),
+            content: zod_1.z.string()
+        }))
+    });
+    fastify.post('/simulate-chat', async (request, reply) => {
         try {
-            const { agentId, messages } = request.body;
+            const validation = SimulateChatSchema.safeParse(request.body);
+            if (!validation.success) {
+                return reply.status(400).send({ error: 'Invalid body' });
+            }
+            const { agentId, messages } = validation.data;
             const { groqClient } = await Promise.resolve().then(() => __importStar(require('../lib/ai')));
             const { prisma } = await Promise.resolve().then(() => __importStar(require('../lib/prisma')));
             const agent = await prisma.agent.findUnique({ where: { id: agentId } });

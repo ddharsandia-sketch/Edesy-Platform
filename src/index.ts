@@ -74,7 +74,7 @@ app.register(settingsRoutes)
 app.register(aiRoutes, { prefix: '/ai' })
 app.register(integrationRoutes)
 
-// Webhooks: Stripe needs rawBody, Twilio needs no parsing — register last
+// Webhooks: PayPal + Twilio need rawBody — register last
 app.register(webhookRoutes)
 
 app.get('/health', async () => ({ status: 'ok' }))

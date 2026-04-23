@@ -27,7 +27,8 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const fileType = file.mimetype.includes('pdf') ? 'pdf' : 'text'
 
     // Send to Python worker — snake_case matches EmbedRequest Pydantic model
-    const response = await fetch('http://localhost:8000/embed-document', {
+    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const response = await fetch(`${workerUrl}/embed-document`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

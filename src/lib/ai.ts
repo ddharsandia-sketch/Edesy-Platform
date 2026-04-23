@@ -22,7 +22,11 @@ async function callGemini(prompt: string): Promise<string> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
   });
-  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`);
+  if (!res.ok) {
+    const errBody = await res.text();
+    console.error('[AI] Gemini HTTP error:', res.status, errBody);
+    throw new Error(`Gemini HTTP ${res.status}: ${errBody}`);
+  }
   const data = await res.json() as any;
   return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
 }

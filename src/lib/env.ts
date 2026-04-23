@@ -31,9 +31,11 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   LIVEKIT_URL: z.string().optional(),
 
-  // Billing
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // AI (Global keys for magic-prompt and schema gen)
+  GLOBAL_GROQ_API_KEY: z.string().optional(),
+  GLOBAL_CEREBRAS_API_KEY: z.string().optional(),
+
+  // Billing (PayPal only)
   PAYPAL_CLIENT_ID: z.string().optional(),
   PAYPAL_CLIENT_SECRET: z.string().optional(),
   PAYPAL_WEBHOOK_ID: z.string().optional(),

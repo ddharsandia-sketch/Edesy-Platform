@@ -21,17 +21,21 @@ export async function agentRoutes(app: FastifyInstance) {
     const body = request.body as {
       name: string
       personaPrompt: string
-      language: string
-      voiceProvider: string
-      voiceId: string
-      sttProvider: string
-      llmModel: string
-      useGeminiLive: boolean
+      language?: string
+      voiceProvider?: string
+      voiceId?: string
+      sttProvider?: string
+      llmModel?: string
+      useGeminiLive?: boolean
       extractionSchema?: string | object
+      templateId?: string
+      // These come from the wizard but are NOT Prisma columns:
+      tierId?: string
+      useCaseId?: string
     }
 
     // Validate: personaPrompt must be at least 50 characters
-    if (body.personaPrompt.length < 50) {
+    if (!body.personaPrompt || body.personaPrompt.length < 50) {
       return reply.code(400).send({
         error:
           'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
@@ -50,10 +54,19 @@ export async function agentRoutes(app: FastifyInstance) {
       }
     }
 
+    // Only pass fields that exist in the Prisma Agent model
     const agent = await prisma.agent.create({
       data: { 
-        ...body, 
         workspaceId,
+        name: body.name,
+        personaPrompt: body.personaPrompt,
+        language: body.language ?? 'en',
+        voiceProvider: body.voiceProvider ?? 'cartesia',
+        voiceId: body.voiceId ?? '21m00Tcm4TlvDq8ikWAM',
+        sttProvider: body.sttProvider ?? 'deepgram',
+        llmModel: body.llmModel ?? 'gpt-4o-mini',
+        useGeminiLive: body.useGeminiLive ?? false,
+        templateId: body.templateId ?? null,
         extractionSchema: parsedSchema ?? undefined
       }
     })

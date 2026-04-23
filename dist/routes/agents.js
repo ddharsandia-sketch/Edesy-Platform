@@ -35,7 +35,8 @@ async function agentRoutes(app) {
                     : body.extractionSchema;
             }
             catch {
-                return reply.code(400).send({ error: 'Invalid extraction schema JSON' });
+                // Invalid JSON in schema — ignore it and save without schema
+                parsedSchema = null;
             }
         }
         const agent = await prisma_1.prisma.agent.create({
@@ -46,7 +47,7 @@ async function agentRoutes(app) {
             }
         });
         // Prefetch greeting audio into Redis (non-blocking — failure is safe)
-        await prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider);
+        prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider);
         return reply.code(201).send(agent);
     });
     // PATCH /agents/:id — Update agent
@@ -65,7 +66,8 @@ async function agentRoutes(app) {
                     : body.extractionSchema;
             }
             catch {
-                return reply.code(400).send({ error: 'Invalid extraction schema JSON' });
+                // Invalid JSON in schema — ignore and save without schema
+                parsedSchema = undefined;
             }
         }
         const dataToUpdate = { ...body };
@@ -213,7 +215,8 @@ async function agentRoutes(app) {
 // Helper: prefetch greeting audio into Redis via Python worker
 async function prefetchGreeting(agentId, prompt, voiceId, voiceProvider) {
     try {
-        const response = await fetch('http://localhost:8000/prefetch-greeting', {
+        const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000';
+        const response = await fetch(`${workerUrl}/prefetch-greeting`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

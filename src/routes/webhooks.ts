@@ -1,14 +1,8 @@
 import { FastifyInstance } from 'fastify'
-import Stripe from 'stripe'
 import twilio from 'twilio'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
 import { redis } from '../lib/redis'
-
-let stripe: Stripe | null = null;
-if (process.env.STRIPE_SECRET_KEY) {
-  stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-03-25.dahlia' as any });
-}
 export async function webhookRoutes(app: FastifyInstance) {
   /**
    * POST /webhooks/twilio/inbound
@@ -221,106 +215,6 @@ export async function webhookRoutes(app: FastifyInstance) {
     return reply.send({ ok: true })
   })
 
-  /**
-   * POST /webhooks/stripe
-   * Handles Stripe subscription lifecycle events.
-   *
-   * CRITICAL: Must read from req.rawBody (Buffer), NOT req.body (parsed object).
-   * Stripe signature verification will throw if given a parsed JS object.
-   * fastify-raw-body is registered globally in index.ts with global: false,
-   * and this route opts in via config: { rawBody: true }.
-   */
-  app.post('/webhooks/stripe', {
-    config: { rawBody: true }  // Opts into raw body capture for this route only
-  }, async (request, reply) => {
-    const sig = request.headers['stripe-signature'] as string
-
-    // Read raw Buffer — NOT request.body (which is already JSON-parsed)
-    const rawPayload = (request as any).rawBody as Buffer
-
-    if (!rawPayload) {
-      console.error('[STRIPE] rawBody is missing — check fastify-raw-body registration order in index.ts')
-      return reply.code(400).send('Missing raw body')
-    }
-
-    if (!stripe) {
-      console.error('[STRIPE] Cannot process webhook: STRIPE_SECRET_KEY is missing')
-      return reply.code(500).send('Stripe not configured')
-    }
-
-    let event: any
-    try {
-      event = stripe.webhooks.constructEvent(
-        rawPayload,   // Buffer — Stripe computes HMAC against this exact byte sequence
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET!
-      )
-    } catch (err: any) {
-      console.error(`[STRIPE] ❌ Signature verification failed: ${err.message}`)
-      return reply.code(400).send(`Webhook Error: ${err.message}`)
-    }
-
-    console.log(`[STRIPE] Event: ${event.type}`)
-
-    switch (event.type) {
-      // ── Subscription started or upgraded ───────────────────────────────────
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated': {
-        const sub = event.data.object as any
-        const workspaceId = sub.metadata?.workspaceId
-        const tier = sub.metadata?.tier || 'starter'
-
-        if (workspaceId) {
-          await prisma.workspace.update({
-            where: { id: workspaceId },
-            data: {
-              stripeSubscriptionId: sub.id,
-              planTier: sub.status === 'active' ? tier : 'free',
-              planExpiresAt: new Date(sub.current_period_end * 1000),
-            }
-          })
-          console.log(`[STRIPE] Workspace ${workspaceId} updated to ${tier} (${sub.status})`)
-        }
-        break
-      }
-
-      // ── Subscription cancelled ─────────────────────────────────────────────
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object as any
-        const workspaceId = sub.metadata?.workspaceId
-        if (workspaceId) {
-          await prisma.workspace.update({
-            where: { id: workspaceId },
-            data: {
-              planTier: 'free',
-              stripeSubscriptionId: null,
-              planExpiresAt: null,
-            }
-          })
-          console.log(`[STRIPE] Workspace ${workspaceId} downgraded to free`)
-        }
-        break
-      }
-
-      // ── Payment succeeded ──────────────────────────────────────────────────
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as any
-        console.log(`[STRIPE] Payment succeeded: $${(invoice.amount_paid / 100).toFixed(2)}`)
-        // You could send a receipt email here via Resend/SendGrid
-        break
-      }
-
-      // ── Payment failed ─────────────────────────────────────────────────────
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as any
-        console.warn(`[STRIPE] Payment FAILED for customer: ${invoice.customer}`)
-        // TODO: Send dunning email to workspace owner
-        break
-      }
-    }
-
-    return reply.send({ received: true })
-  })
 
   /**
    * POST /webhooks/paypal
