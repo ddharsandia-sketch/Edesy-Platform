@@ -7,15 +7,17 @@ export async function aiRoutes(fastify: FastifyInstance) {
   fastify.get('/health', async () => ({ status: 'ai-ok' }));
 
   // Magic Prompt Generator (Groq)
-  fastify.post('/magic-prompt', {
-    schema: {
-      body: z.object({
-        description: z.string().min(5)
-      })
-    }
-  }, async (request, reply) => {
+  const MagicPromptSchema = z.object({
+    description: z.string().min(5)
+  });
+
+  fastify.post('/magic-prompt', async (request, reply) => {
     try {
-      const { description } = request.body as { description: string };
+      const validation = MagicPromptSchema.safeParse(request.body);
+      if (!validation.success) {
+        return reply.status(400).send({ success: false, error: 'Invalid description' });
+      }
+      const { description } = validation.data;
       const enhancedPrompt = await generateMagicPrompt(description);
       
       return reply.send({ success: true, enhancedPrompt });
@@ -26,15 +28,17 @@ export async function aiRoutes(fastify: FastifyInstance) {
   });
 
   // Schema Generator (Cerebras)
-  fastify.post('/generate-schema', {
-    schema: {
-      body: z.object({
-        description: z.string().min(5)
-      })
-    }
-  }, async (request, reply) => {
+  const SchemaGeneratorSchema = z.object({
+    description: z.string().min(5)
+  });
+
+  fastify.post('/generate-schema', async (request, reply) => {
     try {
-      const { description } = request.body as { description: string };
+      const validation = SchemaGeneratorSchema.safeParse(request.body);
+      if (!validation.success) {
+        return reply.status(400).send({ success: false, error: 'Invalid description' });
+      }
+      const { description } = validation.data;
       const schema = await generateSchema(description);
       
       return reply.send({ success: true, schema });
@@ -45,19 +49,21 @@ export async function aiRoutes(fastify: FastifyInstance) {
   });
 
   // Text-Based Simulation (Groq Streaming)
-  fastify.post('/simulate-chat', {
-    schema: {
-      body: z.object({
-        agentId: z.string(),
-        messages: z.array(z.object({
-          role: z.enum(['user', 'assistant', 'system']),
-          content: z.string()
-        }))
-      })
-    }
-  }, async (request, reply) => {
+  const SimulateChatSchema = z.object({
+    agentId: z.string(),
+    messages: z.array(z.object({
+      role: z.enum(['user', 'assistant', 'system']),
+      content: z.string()
+    }))
+  });
+
+  fastify.post('/simulate-chat', async (request, reply) => {
     try {
-      const { agentId, messages } = request.body as any;
+      const validation = SimulateChatSchema.safeParse(request.body);
+      if (!validation.success) {
+        return reply.status(400).send({ error: 'Invalid body' });
+      }
+      const { agentId, messages } = validation.data;
       const { groqClient } = await import('../lib/ai');
       const { prisma } = await import('../lib/prisma');
 
@@ -74,7 +80,7 @@ export async function aiRoutes(fastify: FastifyInstance) {
 
       const stream = await groqClient.chat.completions.create({
         model: 'llama3-70b-8192',
-        messages: conversation,
+        messages: conversation as any,
         stream: true,
         temperature: 0.7,
         max_tokens: 500,
