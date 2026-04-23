@@ -6,7 +6,33 @@
  * Salesforce, WhatsApp (Gupshup), WhatsApp (Twilio)
  */
 
+import { z } from 'zod'
 import { prisma } from './prisma'
+
+// Config schemas for type safety
+const GupshupConfigSchema = z.object({
+  appName: z.string(),
+  sourcePhone: z.string(),
+})
+
+const GoogleSheetsConfigSchema = z.object({
+  spreadsheetId: z.string(),
+  sheetName: z.string().optional(),
+})
+
+const ZapierConfigSchema = z.object({}) // No config needed
+
+const SlackConfigSchema = z.object({}) // No config needed
+
+const NotionConfigSchema = z.object({
+  databaseId: z.string(),
+})
+
+const SalesforceConfigSchema = z.object({}) // No config needed
+
+const TwilioWhatsappConfigSchema = z.object({
+  fromNumber: z.string(),
+})
 
 export interface CallPayload {
   callId: string
@@ -55,7 +81,7 @@ export async function triggerIntegrations(workspaceId: string, payload: CallPayl
     return
   }
 
-  await Promise.allSettled(
+  const results = await Promise.allSettled(
     integrations.map(integration =>
       fireIntegration(integration.type as IntegrationType, integration.apiKey, integration.config, payload)
         .then(() => {
@@ -73,6 +99,13 @@ export async function triggerIntegrations(workspaceId: string, payload: CallPayl
         })
     )
   )
+
+  // Escalate critical failures
+  const failures = results.filter(r => r.status === 'rejected')
+  if (failures.length > 0) {
+    console.error(`[INTEGRATIONS] ${failures.length} integrations failed for call ${payload.callId}`)
+    // Optionally send notification to workspace owner or log to external service
+  }
 }
 
 async function fireIntegration(
@@ -166,8 +199,7 @@ async function fireHubspot(accessToken: string, payload: CallPayload) {
 // ── Google Sheets ─────────────────────────────────────────────────────────────
 
 async function fireGoogleSheets(apiKey: string, config: unknown, payload: CallPayload) {
-  const cfg = config as { spreadsheetId: string; sheetName?: string }
-  if (!cfg?.spreadsheetId) throw new Error('Missing spreadsheetId in Google Sheets config')
+  const cfg = GoogleSheetsConfigSchema.parse(config)
 
   const sheetName = cfg.sheetName || 'Calls'
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.spreadsheetId}/values/${sheetName}!A1:append?valueInputOption=USER_ENTERED&key=${apiKey}`
@@ -271,8 +303,7 @@ async function fireSlack(webhookUrl: string, payload: CallPayload) {
 // ── Notion ────────────────────────────────────────────────────────────────────
 
 async function fireNotion(apiKey: string, config: unknown, payload: CallPayload) {
-  const cfg = config as { databaseId: string }
-  if (!cfg?.databaseId) throw new Error('Missing databaseId in Notion config')
+  const cfg = NotionConfigSchema.parse(config)
 
   const sentimentLabel = typeof payload.sentiment === 'number'
     ? payload.sentiment > 0.3 ? 'positive' : payload.sentiment < -0.3 ? 'negative' : 'neutral'
@@ -339,10 +370,8 @@ async function fireSalesforce(accessToken: string, payload: CallPayload) {
 // ── WhatsApp via Gupshup ──────────────────────────────────────────────────────
 
 async function fireWhatsappGupshup(apiKey: string, config: unknown, payload: CallPayload) {
-  const cfg = config as { appName: string; phone: string; sourcePhone: string }
-  if (!cfg?.appName || !cfg?.sourcePhone) throw new Error('Gupshup config needs appName and sourcePhone')
-
-  const to = cfg.phone || payload.callerNumber
+  const cfg = GupshupConfigSchema.parse(config)
+  const to = payload.callerNumber
   const message = `Hi${payload.callerName ? ` ${payload.callerName}` : ''}! Thank you for your call with ${payload.agentName}. ${payload.summary ? `Summary: ${payload.summary}` : 'We hope we could help!'} If you have any questions, feel free to reply here.`
 
   const res = await fetch('https://api.gupshup.io/wa/api/v1/msg', {
@@ -371,10 +400,9 @@ async function fireWhatsappTwilio(apiKey: string, config: unknown, payload: Call
   const [accountSid, authToken] = apiKey.split(':')
   if (!accountSid || !authToken) throw new Error('Twilio WhatsApp apiKey format: accountSid:authToken')
 
-  const cfg = config as { fromNumber: string; toNumber?: string }
-  if (!cfg?.fromNumber) throw new Error('Twilio WhatsApp config needs fromNumber')
+  const cfg = TwilioWhatsappConfigSchema.parse(config)
 
-  const to = cfg.toNumber || payload.callerNumber
+  const to = payload.callerNumber
   const message = `Hi${payload.callerName ? ` ${payload.callerName}` : ''}! Thank you for speaking with ${payload.agentName}. ${payload.summary || 'We hope we could help!'}`
 
   const credentials = Buffer.from(`${accountSid}:${authToken}`).toString('base64')

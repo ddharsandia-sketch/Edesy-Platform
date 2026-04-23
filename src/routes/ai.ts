@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireAuth } from '../middleware/auth';
 import { generateMagicPrompt, generateSchema } from '../lib/ai';
 
 export async function aiRoutes(fastify: FastifyInstance) {
@@ -11,14 +12,15 @@ export async function aiRoutes(fastify: FastifyInstance) {
     description: z.string().min(5)
   });
 
-  fastify.post('/magic-prompt', async (request, reply) => {
+  fastify.post('/magic-prompt', { preHandler: [requireAuth] }, async (request, reply) => {
     try {
+      const { workspaceId } = request.user as { workspaceId: string };
       const validation = MagicPromptSchema.safeParse(request.body);
       if (!validation.success) {
         return reply.status(400).send({ success: false, error: 'Invalid description' });
       }
       const { description } = validation.data;
-      const enhancedPrompt = await generateMagicPrompt(description);
+      const enhancedPrompt = await generateMagicPrompt(description, workspaceId);
       
       return reply.send({ success: true, enhancedPrompt });
     } catch (error: any) {
@@ -32,14 +34,15 @@ export async function aiRoutes(fastify: FastifyInstance) {
     description: z.string().min(5)
   });
 
-  fastify.post('/generate-schema', async (request, reply) => {
+  fastify.post('/generate-schema', { preHandler: [requireAuth] }, async (request, reply) => {
     try {
+      const { workspaceId } = request.user as { workspaceId: string };
       const validation = SchemaGeneratorSchema.safeParse(request.body);
       if (!validation.success) {
         return reply.status(400).send({ success: false, error: 'Invalid description' });
       }
       const { description } = validation.data;
-      const schema = await generateSchema(description);
+      const schema = await generateSchema(description, workspaceId);
       
       return reply.send({ success: true, schema });
     } catch (error: any) {
@@ -57,19 +60,48 @@ export async function aiRoutes(fastify: FastifyInstance) {
     }))
   });
 
-  fastify.post('/simulate-chat', async (request, reply) => {
+  fastify.post('/simulate-chat', { preHandler: [requireAuth] }, async (request, reply) => {
     try {
+      const { workspaceId } = request.user as { workspaceId: string };
       const validation = SimulateChatSchema.safeParse(request.body);
       if (!validation.success) {
         return reply.status(400).send({ error: 'Invalid body' });
       }
       const { agentId, messages } = validation.data;
-      const { groqClient } = await import('../lib/ai');
       const { prisma } = await import('../lib/prisma');
 
-      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+      const [agent, workspace] = await Promise.all([
+        prisma.agent.findUnique({ where: { id: agentId } }),
+        prisma.workspace.findUnique({ where: { id: workspaceId } }),
+      ]);
+
       if (!agent) {
         return reply.status(404).send({ error: 'Agent not found' });
+      }
+
+      // Pick the best available LLM key in priority order:
+      // 1. Workspace Groq key  2. Workspace OpenAI key  3. Global Groq key  4. Error
+      const groqKey    = (workspace as any)?.groqApiKey    || process.env.GLOBAL_GROQ_API_KEY;
+      const openaiKey  = (workspace as any)?.openaiApiKey  || process.env.OPENAI_API_KEY;
+      const anthropicKey = (workspace as any)?.anthropicApiKey;
+
+      if (!groqKey && !openaiKey && !anthropicKey) {
+        return reply.status(400).send({
+          error: 'No LLM API key found. Please add a Groq or OpenAI key in Settings → API Keys.'
+        });
+      }
+
+      const OpenAI = (await import('openai')).default;
+      let client: InstanceType<typeof OpenAI>;
+      let model: string;
+
+      if (groqKey) {
+        client = new OpenAI({ apiKey: groqKey, baseURL: 'https://api.groq.com/openai/v1' });
+        model = 'llama-3.3-70b-versatile';
+      } else {
+        // OpenAI fallback
+        client = new OpenAI({ apiKey: openaiKey! });
+        model = 'gpt-4o-mini';
       }
 
       // Prepare conversation history
@@ -78,8 +110,8 @@ export async function aiRoutes(fastify: FastifyInstance) {
         ...messages
       ];
 
-      const stream = await groqClient.chat.completions.create({
-        model: 'llama3-70b-8192',
+      const stream = await client.chat.completions.create({
+        model,
         messages: conversation as any,
         stream: true,
         temperature: 0.7,

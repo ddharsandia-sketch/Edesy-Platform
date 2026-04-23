@@ -46,7 +46,7 @@ app.register(rawBody, {
 })
 
 app.register(cors, {
-  origin: true,
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || false,
   credentials: true
 })
 app.register(jwt, { secret: process.env.JWT_SECRET! })

@@ -65,7 +65,7 @@ export async function agentRoutes(app: FastifyInstance) {
         voiceId: body.voiceId ?? '21m00Tcm4TlvDq8ikWAM',
         sttProvider: body.sttProvider ?? 'deepgram',
         llmModel: body.llmModel ?? 'gpt-4o-mini',
-        useGeminiLive: body.useGeminiLive ?? false,
+        useGeminiLive: body.tierId === 'gemini_live' || (body.useGeminiLive ?? false),
         templateId: body.templateId ?? null,
         extractionSchema: parsedSchema ?? undefined
       }
@@ -79,38 +79,64 @@ export async function agentRoutes(app: FastifyInstance) {
 
   // PATCH /agents/:id — Update agent
   app.patch('/agents/:id', { preHandler: requireAuth }, async (request, reply) => {
-    const { workspaceId } = request.user as { workspaceId: string }
-    const { id } = request.params as { id: string }
-    const body = request.body as Partial<{
-      name: string
-      personaPrompt: string
-      language: string
-      voiceId: string
-      extractionSchema: string | object
-    }>
+    try {
+      const { workspaceId } = request.user as { workspaceId: string }
+      const { id } = request.params as { id: string }
+      const body = request.body as Record<string, any>
 
-    const existing = await prisma.agent.findFirst({ where: { id, workspaceId } })
-    if (!existing) return reply.code(404).send({ error: 'Agent not found' })
+      // Verify agent belongs to this workspace
+      const existing = await prisma.agent.findFirst({ where: { id, workspaceId } })
+      if (!existing) return reply.code(404).send({ error: 'Agent not found' })
 
-    let parsedSchema = undefined
-    if (body.extractionSchema) {
-      try {
-        parsedSchema = typeof body.extractionSchema === 'string' 
-          ? JSON.parse(body.extractionSchema) 
-          : body.extractionSchema
-      } catch {
-        // Invalid JSON in schema — ignore and save without schema
-        parsedSchema = undefined
+      const ALLOWED_AGENT_FIELDS = [
+        "name",
+        "personaPrompt",
+        "language",
+        "voiceProvider",
+        "voiceId",
+        "sttProvider",
+        "llmModel",
+        "useGeminiLive",
+        "industry",
+        "templateId",
+        "tierId",
+        "useCaseId",
+        "sttModel",
+        "ttsModel",
+        "ttsPace",
+        "ttsLoudness",
+        "isActive",
+        "knowledgeBaseId",
+      ];
+
+      const dataToUpdate: any = {}
+      for (const key of ALLOWED_AGENT_FIELDS) {
+        if (body[key] !== undefined) {
+          dataToUpdate[key] = body[key];
+        }
       }
-    }
 
-    const dataToUpdate: any = { ...body }
-    if (parsedSchema !== undefined) {
-      dataToUpdate.extractionSchema = parsedSchema
-    }
+      // Handle extractionSchema separately due to potential JSON parsing
+      if (body.extractionSchema !== undefined) {
+        try {
+          dataToUpdate.extractionSchema = typeof body.extractionSchema === 'string' 
+            ? (body.extractionSchema.trim() ? JSON.parse(body.extractionSchema) : null)
+            : body.extractionSchema
+        } catch {
+          dataToUpdate.extractionSchema = null
+        }
+      }
 
-    const updated = await prisma.agent.update({ where: { id }, data: dataToUpdate })
-    return reply.send(updated)
+      const updated = await prisma.agent.update({ 
+        where: { id }, 
+        data: dataToUpdate 
+      })
+
+      return reply.send(updated)
+    } catch (err: any) {
+      console.error("[PATCH /api/agents/:id]", err);
+      return reply.code(500).send({ error: err.message ?? "Failed to update agent" });
+    }
   })
 
   // DELETE /agents/:id
@@ -284,7 +310,10 @@ async function prefetchGreeting(
     const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
     const response = await fetch(`${workerUrl}/prefetch-greeting`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+      },
       body: JSON.stringify({
         agent_id: agentId,        // snake_case — matches Python Pydantic model
         prompt,

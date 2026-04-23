@@ -19,6 +19,26 @@ model Workspace {
   onboardingComplete   Boolean              @default(false)
   paypalPayerId        String?              @unique
   paypalSubscriptionId String?              @unique
+  agentsLimit          Int                  @default(3)
+  anthropicApiKey      String?
+  callsLimit           Int                  @default(1000)
+  cartesiaApiKey       String?
+  cerebrasApiKey       String?
+  deepgramApiKey       String?
+  elevenLabsApiKey     String?
+  exotelApiKey         String?
+  exotelSid            String?
+  geminiApiKey         String?
+  groqApiKey           String?
+  isUnlimited          Boolean              @default(false)
+  minutesLimit         Int                  @default(500)
+  openaiApiKey         String?
+  sarvamApiKey         String?
+  twilioAccountSid     String?
+  twilioAuthToken      String?
+  twilioPhoneNumber    String?
+  activeTel            String?              @default("twilio")
+  exotelToken          String?
   agents               Agent[]
   apiKeys              ApiKey[]
   calls                Call[]
@@ -30,30 +50,28 @@ model Workspace {
 }
 
 model ProviderCredentials {
-  id          String    @id @default(uuid())
-  workspaceId String    @unique
-  // LLMs
-  openaiKey   String?
-  groqKey     String?
-  cerebrasKey String?
-  anthropicKey String?
-  geminiKey   String?
-  // Speech
-  sarvamKey   String?
-  deepgramKey String?
-  cartesiaKey String?
+  id            String    @id @default(uuid())
+  workspaceId   String    @unique
+  openaiKey     String?
+  groqKey       String?
+  cerebrasKey   String?
+  twilioSid     String?
+  twilioToken   String?
+  exotelSid     String?
+  exotelKey     String?
+  exotelToken   String?
+  activeLlm     String    @default("openai")
+  activeTel     String    @default("twilio")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  anthropicKey  String?
+  cartesiaKey   String?
+  deepgramKey   String?
   elevenlabsKey String?
-  // Telephony
-  twilioSid   String?
-  twilioToken String?
-  exotelSid   String?
-  exotelKey   String?
-  exotelToken String?
-  activeLlm   String    @default("openai")
-  activeTel   String    @default("twilio")
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  geminiKey     String?
+  sarvamKey     String?
+  googleKey     String?
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model Agent {
@@ -74,6 +92,13 @@ model Agent {
   industry         String         @default("general")
   templateId       String?
   extractionSchema Json?
+  knowledgeBaseId  String?
+  sttModel         String?
+  tierId           String?
+  ttsLoudness      Float?         @default(1.0)
+  ttsModel         String?
+  ttsPace          Float?         @default(1.0)
+  useCaseId        String?
   workspace        Workspace      @relation(fields: [workspaceId], references: [id])
   calls            Call[]
   campaigns        Campaign[]

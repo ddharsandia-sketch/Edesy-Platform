@@ -47,7 +47,7 @@ export async function createSubscription(planId: string, workspaceId: string) {
       plan_id: planId,
       custom_id: workspaceId,
       application_context: {
-        brand_name: 'Edesy Voice AI',
+        brand_name: 'VoxPilot AI',
         user_action: 'SUBSCRIBE_NOW',
         return_url: `${process.env.NEXT_PUBLIC_APP_URL || 'https://voxpilot-app.vercel.app'}/dashboard/settings?billing=success`,
         cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || 'https://voxpilot-app.vercel.app'}/dashboard/settings?billing=cancelled`,

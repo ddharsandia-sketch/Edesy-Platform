@@ -30,7 +30,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
     const response = await fetch(`${workerUrl}/embed-document`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+      },
       body: JSON.stringify({
         agent_id: agentId,         // snake_case
         file_name: file.filename,  // snake_case
