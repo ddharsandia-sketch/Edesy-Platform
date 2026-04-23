@@ -32,9 +32,18 @@ model Workspace {
 model ProviderCredentials {
   id          String    @id @default(uuid())
   workspaceId String    @unique
+  // LLMs
   openaiKey   String?
   groqKey     String?
   cerebrasKey String?
+  anthropicKey String?
+  geminiKey   String?
+  // Speech
+  sarvamKey   String?
+  deepgramKey String?
+  cartesiaKey String?
+  elevenlabsKey String?
+  // Telephony
   twilioSid   String?
   twilioToken String?
   exotelSid   String?

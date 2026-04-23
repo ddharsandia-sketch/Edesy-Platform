@@ -20,6 +20,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       openaiKey:   mask(creds.openaiKey),
       groqKey:     mask(creds.groqKey),
       cerebrasKey: mask(creds.cerebrasKey),
+      anthropicKey: mask(creds.anthropicKey),
+      geminiKey:   mask(creds.geminiKey),
+      sarvamKey:   mask(creds.sarvamKey),
+      deepgramKey: mask(creds.deepgramKey),
+      cartesiaKey: mask(creds.cartesiaKey),
+      elevenlabsKey: mask(creds.elevenlabsKey),
       twilioSid:   mask(creds.twilioSid),
       twilioToken: mask(creds.twilioToken),
       exotelSid:   mask(creds.exotelSid),
@@ -35,6 +41,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       openaiKey?: string
       groqKey?: string
       cerebrasKey?: string
+      anthropicKey?: string
+      geminiKey?: string
+      sarvamKey?: string
+      deepgramKey?: string
+      cartesiaKey?: string
+      elevenlabsKey?: string
       twilioSid?: string
       twilioToken?: string
       exotelSid?: string
@@ -51,6 +63,12 @@ export async function settingsRoutes(app: FastifyInstance) {
         ...(body.openaiKey   !== undefined && { openaiKey:   body.openaiKey }),
         ...(body.groqKey     !== undefined && { groqKey:     body.groqKey }),
         ...(body.cerebrasKey !== undefined && { cerebrasKey: body.cerebrasKey }),
+        ...(body.anthropicKey!== undefined && { anthropicKey: body.anthropicKey }),
+        ...(body.geminiKey   !== undefined && { geminiKey:   body.geminiKey }),
+        ...(body.sarvamKey   !== undefined && { sarvamKey:   body.sarvamKey }),
+        ...(body.deepgramKey !== undefined && { deepgramKey: body.deepgramKey }),
+        ...(body.cartesiaKey !== undefined && { cartesiaKey: body.cartesiaKey }),
+        ...(body.elevenlabsKey!== undefined && { elevenlabsKey: body.elevenlabsKey }),
         ...(body.twilioSid   !== undefined && { twilioSid:   body.twilioSid }),
         ...(body.twilioToken !== undefined && { twilioToken: body.twilioToken }),
         ...(body.exotelSid   !== undefined && { exotelSid:   body.exotelSid }),
