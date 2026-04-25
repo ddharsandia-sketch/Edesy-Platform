@@ -1,0 +1,569 @@
+====== EDESY DIAGNOSTIC REPORT ======
+Date: Fri Apr 24 08:03:30 +04 2026
+Node: v25.9.0
+NPM:  11.12.1
+
+====== 1. DIRECTORY STRUCTURE ======
+apps/api/src/routes/agents.ts
+apps/api/src/routes/ai.ts
+apps/api/src/routes/auth.ts
+apps/api/src/routes/billing.ts
+apps/api/src/routes/calls.ts
+apps/api/src/routes/campaigns.ts
+apps/api/src/routes/integrations.ts
+apps/api/src/routes/knowledge.ts
+apps/api/src/routes/settings.ts
+apps/api/src/routes/webhooks.ts
+apps/web/src/app/dashboard/agents/new/page.tsx
+apps/web/src/app/dashboard/agents/page.tsx
+apps/web/src/app/dashboard/analytics/page.tsx
+apps/web/src/app/dashboard/calls/page.tsx
+apps/web/src/app/dashboard/campaigns/page.tsx
+apps/web/src/app/dashboard/knowledge/page.tsx
+apps/web/src/app/dashboard/layout.tsx
+apps/web/src/app/dashboard/loading.tsx
+apps/web/src/app/dashboard/mission-control/page.tsx
+apps/web/src/app/dashboard/page.tsx
+apps/web/src/app/dashboard/settings/integrations/page.tsx
+apps/web/src/app/dashboard/settings/page.tsx
+apps/web/src/app/dashboard/simulate/page.tsx
+apps/web/src/app/dashboard/templates/page.tsx
+
+====== 2. BILLING / PAYMENT ROUTES ======
+apps/api/src/routes/webhooks.ts
+apps/api/src/routes/billing.ts
+apps/web/src/app/dashboard/settings/page.tsx
+
+====== 3. BILLING ROUTE CONTENT ======
+import { FastifyInstance } from 'fastify'
+import { prisma } from '../lib/prisma'
+import { createSubscription } from '../lib/paypal'
+import { requireAuth } from '../middleware/auth'
+
+// Plan limits — enforced on every call start
+export const PLAN_LIMITS = {
+  free: {
+    minutesPerMonth: 100,
+    agentsMax: 1,
+    callsPerMonth: 50,
+    label: 'Free',
+    price: 0,
+  },
+  starter: {
+    minutesPerMonth: 2000,
+    agentsMax: 3,
+    callsPerMonth: 1000,
+    label: 'Starter',
+    price: 49,
+  },
+  growth: {
+    minutesPerMonth: 10000,
+    agentsMax: 10,
+    callsPerMonth: 5000,
+    label: 'Growth',
+    price: 149,
+  },
+  enterprise: {
+    minutesPerMonth: 999999,  // Unlimited
+    agentsMax: 999,
+    callsPerMonth: 999999,
+    label: 'Enterprise',
+    price: 499,
+  },
+} as const
+
+export type PlanTier = keyof typeof PLAN_LIMITS
+
+export async function billingRoutes(app: FastifyInstance) {
+  /**
+   * GET /billing/plans
+   * Returns all available plans (public — no auth required).
+   * Used for the pricing page.
+   */
+  app.get('/billing/plans', async (request, reply) => {
+    return reply.send(
+      Object.entries(PLAN_LIMITS).map(([tier, config]) => ({
+        tier,
+        ...config,
+        planId: process.env[`PAYPAL_${tier.toUpperCase()}_PLAN_ID`] ?? null,
+      }))
+    )
+  })
+
+  /**
+   * GET /billing/subscription
+   * Returns the current workspace's subscription status.
+   */
+  app.get('/billing/subscription', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: {
+        paypalPayerId: true,
+        paypalSubscriptionId: true,
+        planTier: true,
+        planExpiresAt: true,
+      }
+    })
+
+    if (!workspace) return reply.code(404).send({ error: 'Workspace not found' })
+
+    // Get current month usage
+    const startOfMonth = new Date()
+    startOfMonth.setDate(1)
+    startOfMonth.setHours(0, 0, 0, 0)
+
+    const usage = await prisma.call.aggregate({
+      where: {
+        workspaceId,
+        startTime: { gte: startOfMonth },
+        status: 'completed',
+      },
+      _sum: { duration: true }
+    })
+
+    const minutesUsed = Math.ceil((usage._sum.duration || 0) / 60)
+    const limits = PLAN_LIMITS[workspace.planTier as PlanTier] || PLAN_LIMITS.free
+
+    return reply.send({
+      tier: workspace.planTier || 'free',
+      limits,
+      usage: {
+        minutesUsed,
+        minutesRemaining: Math.max(0, limits.minutesPerMonth - minutesUsed),
+        pctUsed: Math.round((minutesUsed / limits.minutesPerMonth) * 100),
+      },
+      paypalSubscriptionId: workspace.paypalSubscriptionId,
+    })
+  })
+
+  /**
+   * POST /billing/checkout
+   * Create a PayPal Subscription request.
+   * Returns approval URL and subscription ID.
+   *
+   * Body: { tier: "starter" | "growth" | "enterprise" }
+   */
+  app.post('/billing/checkout', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { tier } = request.body as { tier: PlanTier }
+
+    if (!['starter', 'growth', 'enterprise'].includes(tier)) {
+      return reply.code(400).send({ error: 'Invalid tier. Must be: starter, growth, or enterprise' })
+    }
+
+    const planId = process.env[`PAYPAL_${tier.toUpperCase()}_PLAN_ID`]
+    if (!planId) return reply.code(500).send({ error: `PayPal Plan ID for ${tier} not configured` })
+
+    try {
+      const subscription: any = await createSubscription(planId, workspaceId)
+      
+      // Get the approval link from the response
+      const approvalUrl = subscription.links?.find((l: any) => l.rel === 'approve')?.href
+
+      return reply.send({ 
+        checkoutUrl: approvalUrl,
+        subscriptionId: subscription.id 
+      })
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message })
+    }
+  })
+
+  /**
+   * POST /billing/portal
+   * For PayPal, there is no generic "billing portal" session like Stripe.
+   * We redirect users to their PayPal account subscriptions page.
+   */
+  app.post('/billing/portal', { preHandler: requireAuth }, async (request, reply) => {
+    // PayPal Subscriptions are managed directly in the user's PayPal account
+    return reply.send({ 
+       portalUrl: 'https://www.paypal.com/myaccount/autopay/' 
+    })
+  })
+}
+
+====== 4. GOOGLE OAUTH / CALENDAR ======
+apps/api/src/lib/integrations.ts
+apps/api/src/lib/voice-tiers.ts
+apps/api/src/lib/ai.ts
+apps/api/src/lib/paypal.ts
+
+====== 5. INTEGRATIONS ROUTE ======
+import { FastifyInstance } from 'fastify'
+import { prisma } from '../lib/prisma'
+
+export async function integrationRoutes(fastify: FastifyInstance) {
+  // Auth helper
+  async function getWorkspaceId(request: any, reply: any): Promise<string | null> {
+    try {
+      await request.jwtVerify()
+      const workspace = await prisma.workspace.findFirst({
+        where: { ownerId: request.user.id },
+        select: { id: true },
+      })
+      if (!workspace) {
+        reply.status(403).send({ error: 'No workspace found' })
+        return null
+      }
+      return workspace.id
+    } catch {
+      reply.status(401).send({ error: 'Unauthorized' })
+      return null
+    }
+  }
+
+  // GET /integrations — list all integrations for workspace
+  fastify.get('/integrations', async (request, reply) => {
+    const workspaceId = await getWorkspaceId(request, reply)
+    if (!workspaceId) return
+
+    const integrations = await prisma.integration.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        type: true,
+        label: true,
+        enabled: true,
+        lastTestedAt: true,
+        lastTestOk: true,
+        createdAt: true,
+        // Never expose apiKey in list response
+      },
+    })
+
+    return reply.send(integrations)
+  })
+
+  // POST /integrations — create or update an integration
+  fastify.post('/integrations', async (request, reply) => {
+    const workspaceId = await getWorkspaceId(request, reply)
+    if (!workspaceId) return
+
+    const { type, label, apiKey, config, enabled } = request.body as {
+      type: string
+      label: string
+      apiKey: string
+      config?: Record<string, unknown>
+      enabled?: boolean
+    }
+
+    if (!type || !label || !apiKey) {
+      return reply.status(400).send({ error: 'type, label, and apiKey are required' })
+    }
+
+    // Upsert by workspaceId + type (one integration per type per workspace)
+    const existing = await prisma.integration.findFirst({
+      where: { workspaceId, type },
+    })
+
+    let integration
+    if (existing) {
+      integration = await prisma.integration.update({
+        where: { id: existing.id },
+        data: { label, apiKey, config: (config ?? undefined) as any, enabled: enabled ?? existing.enabled },
+      })
+    } else {
+      integration = await prisma.integration.create({
+        data: { workspaceId, type, label, apiKey, config: (config ?? {}) as any, enabled: enabled ?? true },
+      })
+    }
+
+
+====== 6. KNOWLEDGE BASE ======
+import { FastifyInstance } from 'fastify'
+import { requireAuth } from '../middleware/auth'
+import { prisma } from '../lib/prisma'
+
+export async function knowledgeRoutes(app: FastifyInstance) {
+
+  /**
+   * POST /knowledge/:agentId/upload
+   * Upload a PDF or text file to the agent's knowledge base.
+   */
+  app.post('/knowledge/:agentId/upload', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { agentId } = request.params as { agentId: string }
+
+    const agent = await prisma.agent.findFirst({ where: { id: agentId, workspaceId } })
+    if (!agent) return reply.code(404).send({ error: 'Agent not found' })
+
+    const file = await request.file()
+    if (!file) return reply.code(400).send({ error: 'No file uploaded' })
+
+    const chunks: Buffer[] = []
+    for await (const chunk of file.file) {
+      chunks.push(chunk)
+    }
+    const fileBuffer = Buffer.concat(chunks)
+    const fileBase64 = fileBuffer.toString('base64')
+    const fileType = file.mimetype.includes('pdf') ? 'pdf' : 'text'
+
+    // Send to Python worker — snake_case matches EmbedRequest Pydantic model
+    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const response = await fetch(`${workerUrl}/embed-document`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+      },
+      body: JSON.stringify({
+        agent_id: agentId,         // snake_case
+        file_name: file.filename,  // snake_case
+        file_type: fileType,       // snake_case
+        file_base64: fileBase64    // snake_case
+      })
+    })
+
+    if (!response.ok) {
+      return reply.code(500).send({ error: 'Failed to embed document' })
+    }
+
+    const doc = await prisma.knowledgeDoc.create({
+      data: {
+        agentId,
+        fileName: file.filename,
+        fileType,
+        content: '[embedded]',
+        embedded: true
+      }
+    })
+
+    return reply.send({ id: doc.id, fileName: file.filename, status: 'embedded' })
+  })
+
+  // GET /knowledge/:agentId — list docs for this agent
+  app.get('/knowledge/:agentId', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { agentId } = request.params as { agentId: string }
+
+    const agent = await prisma.agent.findFirst({ where: { id: agentId, workspaceId } })
+    if (!agent) return reply.code(404).send({ error: 'Agent not found' })
+
+    const docs = await prisma.knowledgeDoc.findMany({
+      where: { agentId },
+      orderBy: { createdAt: 'desc' }
+    })
+    return reply.send(docs)
+  })
+}
+apps/api/src/routes/knowledge.ts
+apps/api/src/routes/campaigns.ts
+apps/api/src/routes/agents.ts
+
+====== 7. AGENT CREATION ROUTE ======
+apps/api/src/routes/calls.ts:170:      agent = await prisma.agent.create({
+apps/api/src/routes/agents.ts:18:  // POST /agents — Create new agent
+apps/api/src/routes/agents.ts:58:    const agent = await prisma.agent.create({
+apps/api/src/routes/agents.ts:155:   * POST /agents/:id/simulate
+apps/api/src/routes/agents.ts:226:   * POST /agents/:id/phone-numbers
+import { FastifyInstance } from 'fastify'
+import twilio from 'twilio'
+import { prisma } from '../lib/prisma'
+import { requireAuth } from '../middleware/auth'
+
+export async function agentRoutes(app: FastifyInstance) {
+
+  // GET /agents — List all agents for this workspace
+  app.get('/agents', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const agents = await prisma.agent.findMany({
+      where: { workspaceId },
+      include: { phoneNumbers: true, _count: { select: { calls: true } } }
+    })
+    return reply.send(agents)
+  })
+
+  // POST /agents — Create new agent
+  app.post('/agents', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const body = request.body as {
+      name: string
+      personaPrompt: string
+      language?: string
+      voiceProvider?: string
+      voiceId?: string
+      sttProvider?: string
+      llmModel?: string
+      useGeminiLive?: boolean
+      extractionSchema?: string | object
+      templateId?: string
+      // These come from the wizard but are NOT Prisma columns:
+      tierId?: string
+      useCaseId?: string
+    }
+
+    // Validate: personaPrompt must be at least 50 characters
+    if (!body.personaPrompt || body.personaPrompt.length < 50) {
+      return reply.code(400).send({
+        error:
+          'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
+      })
+    }
+
+    let parsedSchema = null
+    if (body.extractionSchema) {
+      try {
+        parsedSchema = typeof body.extractionSchema === 'string' 
+          ? JSON.parse(body.extractionSchema) 
+          : body.extractionSchema
+      } catch {
+        // Invalid JSON in schema — ignore it and save without schema
+        parsedSchema = null
+      }
+    }
+
+    // Only pass fields that exist in the Prisma Agent model
+    const agent = await prisma.agent.create({
+      data: { 
+        workspaceId,
+
+====== 8. AGENT DEPLOY / LIVE ======
+apps/api/src/routes/calls.ts:2:import { AccessToken } from 'livekit-server-sdk'
+apps/api/src/routes/calls.ts:49:    const livekitToken = await token.toJwt()
+apps/api/src/routes/calls.ts:61:        liveKitRoomId: roomName
+apps/api/src/routes/calls.ts:76:          livekit_room_name: roomName,
+apps/api/src/routes/calls.ts:77:          livekit_token: livekitToken,
+apps/api/src/routes/calls.ts:83:          use_gemini_live: agent.useGeminiLive,
+apps/api/src/routes/calls.ts:97:    const twiml = telephony.generateConnectXml(roomName, livekitToken)
+apps/api/src/routes/calls.ts:120:      return reply.code(400).send({ error: 'Agent has no phone number assigned. Add one in Settings.' })
+apps/api/src/routes/calls.ts:132:    const livekitToken = await token.toJwt()
+apps/api/src/routes/calls.ts:142:        liveKitRoomId: roomName
+apps/api/src/routes/calls.ts:148:      from: agent.phoneNumbers[0].number,
+apps/api/src/routes/calls.ts:149:      url: `${process.env.NEXT_PUBLIC_API_URL}/calls/inbound-twiml?callId=${callId}&roomName=${roomName}&token=${livekitToken}`
+apps/api/src/routes/calls.ts:174:          personaPrompt: 'You are a friendly and energetic sales assistant for Edesy Voice AI. Edesy Voice AI provides low-latency, scalable AI voice agents that users can deploy in minutes. Keep your answers brief, engaging, and focus on the ultra-low latency and WebRTC capabilities you are currently demonstrating.',
+apps/api/src/routes/calls.ts:214:        liveKitRoomId: roomName
+apps/api/src/routes/calls.ts:228:          livekit_room_name: roomName,
+apps/api/src/routes/calls.ts:229:          livekit_token: workerToken,
+apps/api/src/routes/calls.ts:230:          persona_prompt: 'You are a friendly and energetic sales assistant for Edesy Voice AI. Edesy Voice AI provides low-latency, scalable AI voice agents that users can deploy in minutes. Keep your answers brief, engaging, and focus on the ultra-low latency you are currently demonstrating.',
+apps/api/src/routes/calls.ts:235:          use_gemini_live: agent.useGeminiLive,
+apps/api/src/routes/calls.ts:252:      url: process.env.LIVEKIT_URL || 'wss://your-app.livekit.cloud'
+apps/api/src/routes/calls.ts:358:   * GET /calls/:id/stream — SSE endpoint for live call monitoring
+
+====== 9. PRISMA SCHEMA — KEY MODELS ======
+model Workspace {
+  id                   String               @id @default(uuid())
+  name                 String
+  ownerId              String
+--
+model Agent {
+  id               String         @id @default(uuid())
+  workspaceId      String
+  name             String
+--
+model AgentTemplate {
+  id                String   @id @default(cuid())
+  name              String
+  category          String
+--
+model Integration {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  type         String
+
+====== 10. ENV VARIABLES PRESENT (keys only, no values) ======
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# ── LiveKit (production) ────────────────────────────────────────────────────
+# ── Phase 3 additions ──
+# ── Production URLs ─────────────────────────────────────────────────────────
+# ── Sentry ──────────────────────────────────────────────────────────────────
+API_PORT
+CARTESIA_API_KEY
+DATABASE_URL
+DEEPGRAM_API_KEY
+ELEVENLABS_API_KEY
+ELEVENLABS_API_KEY
+EXOTEL_ACCOUNT_SID
+EXOTEL_API_KEY
+EXOTEL_API_KEY
+EXOTEL_API_TOKEN
+EXOTEL_API_TOKEN
+EXOTEL_SID
+EXOTEL_SUBDOMAIN
+GHOST_MODE_ENABLED
+GLOBAL_CEREBRAS_API_KEY
+GLOBAL_GROQ_API_KEY
+GOOGLE_GEMINI_API_KEY
+GOOGLE_GEMINI_API_KEY
+INTERNAL_API_KEY
+JWT_SECRET
+LIVEKIT_API_KEY
+LIVEKIT_API_KEY
+LIVEKIT_API_SECRET
+LIVEKIT_API_SECRET
+LIVEKIT_URL
+LIVEKIT_URL
+NEXT_PUBLIC_API_URL
+NEXT_PUBLIC_API_URL
+NEXT_PUBLIC_APP_URL
+NODE_ENV
+OPENAI_API_KEY
+PAYPAL_CLIENT_ID
+PAYPAL_CLIENT_SECRET
+PAYPAL_ENTERPRISE_PLAN_ID
+PAYPAL_GROWTH_PLAN_ID
+PAYPAL_STARTER_PLAN_ID
+PAYPAL_WEBHOOK_ID
+QDRANT_API_KEY
+QDRANT_URL
+REDIS_URL
+SARVAM_API_KEY
+SENTRY_DSN
+SIGNALWIRE_API_TOKEN
+SIGNALWIRE_PROJECT_ID
+SIGNALWIRE_SPACE_URL
+SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY
+SUPABASE_URL
+TAVILY_API_KEY
+TELEPHONY_PROVIDER
+TWILIO_ACCOUNT_SID
+TWILIO_ACCOUNT_SID
+TWILIO_AUTH_TOKEN
+TWILIO_AUTH_TOKEN
+TWILIO_PHONE_NUMBER
+VOICE_WORKER_URL
+---
+# Created by Vercel CLI
+VERCEL_OIDC_TOKEN
+
+====== 11. RECENT ERRORS IN LOGS (Railway) ======
+Run manually: railway logs --tail 100
+
+====== 12. app.ts — ALL REGISTERED ROUTES ======
+
+====== 13. TYPESCRIPT ERRORS ======
+
+====== DONE ======
+Paste the full output of this file to get your fixes
