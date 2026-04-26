@@ -392,20 +392,21 @@ async function callRoutes(app) {
         const { days = '7' } = request.query;
         const since = new Date();
         since.setDate(since.getDate() - Number(days));
-        const result = await prisma_1.prisma.$queryRaw `
-      SELECT
-        DATE_TRUNC('day', "startTime")::date::text AS date,
-        COUNT(*) AS count
-      FROM "Call"
-      WHERE "workspaceId" = ${workspaceId}::uuid
-        AND "startTime" >= ${since}
-      GROUP BY DATE_TRUNC('day', "startTime")
-      ORDER BY date ASC
-    `;
-        return reply.send(result.map(r => ({
-            date: r.date,
-            count: Number(r.count)
-        })));
+        // Build day-by-day data using Prisma ORM (avoids raw SQL UUID type mismatch)
+        const allCalls = await prisma_1.prisma.call.findMany({
+            where: { workspaceId, startTime: { gte: since } },
+            select: { startTime: true },
+        });
+        // Group by date string in JS
+        const grouped = {};
+        for (const call of allCalls) {
+            const date = call.startTime.toISOString().slice(0, 10); // "2026-04-12"
+            grouped[date] = (grouped[date] || 0) + 1;
+        }
+        const result = Object.entries(grouped)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, count]) => ({ date, count }));
+        return reply.send(result);
     });
     /**
      * POST /calls/:id/ghost-mode/activate
