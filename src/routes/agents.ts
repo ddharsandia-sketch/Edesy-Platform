@@ -228,7 +228,11 @@ export async function agentRoutes(app: FastifyInstance) {
   app.get('/agents/:id/simulate/:jobId', { preHandler: requireAuth }, async (request, reply) => {
     const { jobId } = request.params as { id: string; jobId: string }
 
-    const res = await fetch(`http://localhost:8000/simulate/status/${jobId}`)
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
+    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
+
+    const res = await fetch(`${workerUrl}/simulate/status/${jobId}`)
     if (!res.ok) return reply.code(404).send({ error: 'Job not found' })
 
     return reply.send(await res.json())
@@ -276,28 +280,35 @@ export async function agentRoutes(app: FastifyInstance) {
       })
     }
 
-    // Configure Twilio webhook for this number automatically
-    const twilioClient = twilio(
-      process.env.TWILIO_ACCOUNT_SID!,
-      process.env.TWILIO_AUTH_TOKEN!
-    )
+    // Find the active telephony provider from workspace settings
+    const workspaceSettings = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+    const telephonyProvider = (workspaceSettings as any)?.activeTel || 'twilio';
 
-    try {
-      // Find the number in Twilio account
-      const twilioNumbers = await twilioClient.incomingPhoneNumbers.list({ phoneNumber: number })
-      if (twilioNumbers.length > 0) {
-        // Update webhook URL
-        await twilioClient.incomingPhoneNumbers(twilioNumbers[0].sid).update({
-          voiceUrl: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/inbound`,
-          voiceMethod: 'POST',
-          statusCallback: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/status`,
-          statusCallbackMethod: 'POST',
-        })
-        console.log(`[TWILIO] Configured webhook for ${number}`)
+    if (telephonyProvider === 'twilio') {
+      // Configure Twilio webhook for this number automatically
+      const twilioClient = twilio(
+        (workspaceSettings as any)?.twilioAccountSid || process.env.TWILIO_ACCOUNT_SID!,
+        (workspaceSettings as any)?.twilioAuthToken || process.env.TWILIO_AUTH_TOKEN!
+      );
+
+      try {
+        const twilioNumbers = await twilioClient.incomingPhoneNumbers.list({ phoneNumber: number });
+        if (twilioNumbers.length > 0) {
+          await twilioClient.incomingPhoneNumbers(twilioNumbers[0].sid).update({
+            voiceUrl: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/inbound`,
+            voiceMethod: 'POST',
+            statusCallback: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/status`,
+            statusCallbackMethod: 'POST',
+          });
+          console.log(`[TWILIO] Configured webhook for ${number}`);
+        }
+      } catch (err) {
+        console.warn(`[TWILIO] Could not auto-configure webhook for ${number}:`, err);
       }
-    } catch (err) {
-      console.warn(`[TWILIO] Could not auto-configure webhook for ${number}:`, err)
-      // Non-blocking — user can configure manually in Twilio console
+    } else if (telephonyProvider === 'exotel') {
+      // For Exotel, webhooks are configured via the App Bazaar in the Exotel dashboard
+      const exotelPassthruUrl = `${process.env.NEXT_PUBLIC_API_URL}/webhooks/exotel/passthru`;
+      console.log(`[EXOTEL] Webhook configuration required for ${number}. Please set your Exotel App Bazaar "Passthru" URL to: ${exotelPassthruUrl}`);
     }
 
     const phoneNumber = await prisma.phoneNumber.create({
