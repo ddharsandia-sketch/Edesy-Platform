@@ -181,6 +181,8 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
 
-    return reply.redirect(`${process.env.FRONTEND_URL}/dashboard/settings/integrations?google=success`);
+    const frontendUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://edesymkc.vercel.app';
+    return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=success`);
   });
 }
+
