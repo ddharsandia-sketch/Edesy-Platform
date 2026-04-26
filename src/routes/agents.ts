@@ -201,16 +201,23 @@ export async function agentRoutes(app: FastifyInstance) {
     const isProd = process.env.NODE_ENV === 'production'
     const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
     const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
-    const res = await fetch(`${workerUrl}/simulate/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agent_id: id,
-        persona_prompt: agent.personaPrompt,
-        num_simulations: numSimulations,
-        max_turns: maxTurns,
+    
+    let res;
+    try {
+      res = await fetch(`${workerUrl}/simulate/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_id: id,
+          persona_prompt: agent.personaPrompt,
+          num_simulations: numSimulations,
+          max_turns: maxTurns,
+        })
       })
-    })
+    } catch (err: any) {
+      console.error('[SIMULATE START] Worker unreachable:', err.message)
+      return reply.code(502).send({ error: 'Voice worker is unreachable. Ensure the Python worker is running.' })
+    }
 
     if (!res.ok) {
       const err = await res.json()

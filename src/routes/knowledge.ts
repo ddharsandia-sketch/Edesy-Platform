@@ -27,22 +27,32 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const fileType = file.mimetype.includes('pdf') ? 'pdf' : 'text'
 
     // Send to Python worker — snake_case matches EmbedRequest Pydantic model
-    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
-    const response = await fetch(`${workerUrl}/embed-document`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
-      },
-      body: JSON.stringify({
-        agent_id: agentId,         // snake_case
-        file_name: file.filename,  // snake_case
-        file_type: fileType,       // snake_case
-        file_base64: fileBase64    // snake_case
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
+    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
+    
+    let response;
+    try {
+      response = await fetch(`${workerUrl}/embed-document`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+        },
+        body: JSON.stringify({
+          agent_id: agentId,         // snake_case
+          file_name: file.filename,  // snake_case
+          file_type: fileType,       // snake_case
+          file_base64: fileBase64    // snake_case
+        })
       })
-    })
+    } catch (err: any) {
+      console.error('[KNOWLEDGE UPLOAD] Worker unreachable:', err.message)
+      return reply.code(502).send({ error: 'Voice worker is unreachable. Ensure the Python worker is running.' })
+    }
 
     if (!response.ok) {
+      console.error('[KNOWLEDGE UPLOAD] Worker returned error:', response.status)
       return reply.code(500).send({ error: 'Failed to embed document' })
     }
 
