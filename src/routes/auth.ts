@@ -110,8 +110,14 @@ export async function authRoutes(app: FastifyInstance) {
     return reply.send({ token, workspaceId: workspace.id })
   })
 
-  // GET /auth/google
+  // GET /auth/google?state=workspaceId
   app.get('/auth/google', async (request, reply) => {
+    const { state } = request.query as { state?: string }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return reply.code(500).send({ error: 'Google OAuth not configured. GOOGLE_CLIENT_ID is missing.' })
+    }
+
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
@@ -121,7 +127,8 @@ export async function authRoutes(app: FastifyInstance) {
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: ['https://www.googleapis.com/auth/calendar.events'],
-      prompt: 'consent' // to force refresh token
+      prompt: 'consent',
+      ...(state && { state }), // pass workspaceId through to callback
     });
 
     return reply.redirect(url);

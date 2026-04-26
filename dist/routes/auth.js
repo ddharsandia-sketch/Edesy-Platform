@@ -109,13 +109,18 @@ async function authRoutes(app) {
         const token = app.jwt.sign({ userId: data.user.id, workspaceId: workspace.id, email }, { expiresIn: '7d' });
         return reply.send({ token, workspaceId: workspace.id });
     });
-    // GET /auth/google
+    // GET /auth/google?state=workspaceId
     app.get('/auth/google', async (request, reply) => {
+        const { state } = request.query;
+        if (!process.env.GOOGLE_CLIENT_ID) {
+            return reply.code(500).send({ error: 'Google OAuth not configured. GOOGLE_CLIENT_ID is missing.' });
+        }
         const oauth2Client = new googleapis_1.google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
         const url = oauth2Client.generateAuthUrl({
             access_type: 'offline',
             scope: ['https://www.googleapis.com/auth/calendar.events'],
-            prompt: 'consent' // to force refresh token
+            prompt: 'consent',
+            ...(state && { state }), // pass workspaceId through to callback
         });
         return reply.redirect(url);
     });
