@@ -4,8 +4,23 @@ import { requireAuth } from "../middleware/auth";
 
 export async function settingsRoutes(app: FastifyInstance) {
 
-  // ── GET /api/settings ──────────────────────────────────────────────────────
-  app.get("/api/settings", { preHandler: requireAuth }, async (req, reply) => {
+  // ── GET /settings/onboarding-status ────────────────────────────────────────
+  app.get("/settings/onboarding-status", { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { workspaceId } = (req as any).user;
+      const workspace = await prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { onboardingComplete: true },
+      });
+      return reply.send({ onboardingComplete: workspace?.onboardingComplete ?? false });
+    } catch (err: any) {
+      console.error("[GET /settings/onboarding-status] FAILED:", err.message);
+      return reply.status(500).send({ error: "Failed to check onboarding status" });
+    }
+  });
+
+  // ── GET /settings ──────────────────────────────────────────────────────────
+  app.get("/settings", { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { workspaceId } = (req as any).user;
 
@@ -59,8 +74,8 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── PATCH /api/settings ────────────────────────────────────────────────────
-  app.patch("/api/settings", { preHandler: requireAuth }, async (req, reply) => {
+  // ── PATCH /settings ────────────────────────────────────────────────────────
+  app.patch("/settings", { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { workspaceId } = (req as any).user;
       const body = req.body as Record<string, any>;

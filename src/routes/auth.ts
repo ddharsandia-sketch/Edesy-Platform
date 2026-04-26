@@ -149,8 +149,17 @@ export async function authRoutes(app: FastifyInstance) {
       process.env.GOOGLE_REDIRECT_URI
     );
 
-    const { tokens } = await oauth2Client.getToken(code);
-    const { access_token, refresh_token } = tokens;
+    let access_token, refresh_token;
+    try {
+      const { tokens } = await oauth2Client.getToken(code);
+      access_token = tokens.access_token;
+      refresh_token = tokens.refresh_token;
+    } catch (err: any) {
+      console.error('[Google OAuth] Token exchange failed:', err.response?.data || err.message);
+      // Fallback domain
+      const frontendUrl = process.env.APP_FRONTEND_URL || process.env.FRONTEND_URL || 'https://voxpilot-app.vercel.app';
+      return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=error&details=${encodeURIComponent(err.message)}`);
+    }
 
     // Ideally, state = workspaceId. If not, we would decode JWT from cookie or similar.
     // Assuming state is the workspaceId for this demo integration
