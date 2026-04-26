@@ -115,9 +115,8 @@ start()
 if (process.env.NODE_ENV === 'production') {
   setInterval(async () => {
     try {
-      if (process.env.VOICE_WORKER_URL) {
-        await fetch(`${process.env.VOICE_WORKER_URL}/health`)
-      }
+      const url = getWorkerUrl()
+      await fetch(`${url}/health`)
     } catch { /* Silent — non-critical */ }
   }, 4 * 60 * 1000)  // Every 4 minutes
 }

@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
+import { getWorkerUrl } from '../lib/env'
 
 export async function knowledgeRoutes(app: FastifyInstance) {
 
@@ -27,9 +28,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     const fileType = file.mimetype.includes('pdf') ? 'pdf' : 'text'
 
     // Send to Python worker — snake_case matches EmbedRequest Pydantic model
-    const isProd = process.env.NODE_ENV === 'production'
-    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
-    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
+    const workerUrl = getWorkerUrl()
     
     let response;
     try {

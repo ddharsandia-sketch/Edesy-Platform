@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
 import { prisma } from '../lib/prisma'
+import { getWorkerUrl } from '../lib/env'
 import { requireAuth } from '../middleware/auth'
 
 export async function agentRoutes(app: FastifyInstance) {
@@ -198,9 +199,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!agent) return reply.code(404).send({ error: 'Agent not found' })
 
     // Start simulation job on Python worker
-    const isProd = process.env.NODE_ENV === 'production'
-    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
-    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
+    const workerUrl = getWorkerUrl()
     
     let res;
     try {
