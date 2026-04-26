@@ -8,7 +8,26 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.triggerIntegrations = triggerIntegrations;
+const zod_1 = require("zod");
 const prisma_1 = require("./prisma");
+// Config schemas for type safety
+const GupshupConfigSchema = zod_1.z.object({
+    appName: zod_1.z.string(),
+    sourcePhone: zod_1.z.string(),
+});
+const GoogleSheetsConfigSchema = zod_1.z.object({
+    spreadsheetId: zod_1.z.string(),
+    sheetName: zod_1.z.string().optional(),
+});
+const ZapierConfigSchema = zod_1.z.object({}); // No config needed
+const SlackConfigSchema = zod_1.z.object({}); // No config needed
+const NotionConfigSchema = zod_1.z.object({
+    databaseId: zod_1.z.string(),
+});
+const SalesforceConfigSchema = zod_1.z.object({}); // No config needed
+const TwilioWhatsappConfigSchema = zod_1.z.object({
+    fromNumber: zod_1.z.string(),
+});
 /** Master dispatcher: loads enabled integrations and fires each handler */
 async function triggerIntegrations(workspaceId, payload) {
     let integrations;
@@ -22,7 +41,7 @@ async function triggerIntegrations(workspaceId, payload) {
         console.warn('[INTEGRATIONS] Failed to load integrations:', err);
         return;
     }
-    await Promise.allSettled(integrations.map(integration => fireIntegration(integration.type, integration.apiKey, integration.config, payload)
+    const results = await Promise.allSettled(integrations.map(integration => fireIntegration(integration.type, integration.apiKey, integration.config, payload)
         .then(() => {
         return prisma_1.prisma.integration.update({
             where: { id: integration.id },
@@ -36,6 +55,12 @@ async function triggerIntegrations(workspaceId, payload) {
             data: { lastTestedAt: new Date(), lastTestOk: false },
         }).catch(() => { });
     })));
+    // Escalate critical failures
+    const failures = results.filter(r => r.status === 'rejected');
+    if (failures.length > 0) {
+        console.error(`[INTEGRATIONS] ${failures.length} integrations failed for call ${payload.callId}`);
+        // Optionally send notification to workspace owner or log to external service
+    }
 }
 async function fireIntegration(type, apiKey, config, payload) {
     switch (type) {
@@ -113,9 +138,7 @@ async function fireHubspot(accessToken, payload) {
 }
 // ── Google Sheets ─────────────────────────────────────────────────────────────
 async function fireGoogleSheets(apiKey, config, payload) {
-    const cfg = config;
-    if (!cfg?.spreadsheetId)
-        throw new Error('Missing spreadsheetId in Google Sheets config');
+    const cfg = GoogleSheetsConfigSchema.parse(config);
     const sheetName = cfg.sheetName || 'Calls';
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${cfg.spreadsheetId}/values/${sheetName}!A1:append?valueInputOption=USER_ENTERED&key=${apiKey}`;
     const sentimentLabel = typeof payload.sentiment === 'number'
@@ -205,9 +228,7 @@ async function fireSlack(webhookUrl, payload) {
 }
 // ── Notion ────────────────────────────────────────────────────────────────────
 async function fireNotion(apiKey, config, payload) {
-    const cfg = config;
-    if (!cfg?.databaseId)
-        throw new Error('Missing databaseId in Notion config');
+    const cfg = NotionConfigSchema.parse(config);
     const sentimentLabel = typeof payload.sentiment === 'number'
         ? payload.sentiment > 0.3 ? 'positive' : payload.sentiment < -0.3 ? 'negative' : 'neutral'
         : String(payload.sentiment);
@@ -266,10 +287,8 @@ async function fireSalesforce(accessToken, payload) {
 }
 // ── WhatsApp via Gupshup ──────────────────────────────────────────────────────
 async function fireWhatsappGupshup(apiKey, config, payload) {
-    const cfg = config;
-    if (!cfg?.appName || !cfg?.sourcePhone)
-        throw new Error('Gupshup config needs appName and sourcePhone');
-    const to = cfg.phone || payload.callerNumber;
+    const cfg = GupshupConfigSchema.parse(config);
+    const to = payload.callerNumber;
     const message = `Hi${payload.callerName ? ` ${payload.callerName}` : ''}! Thank you for your call with ${payload.agentName}. ${payload.summary ? `Summary: ${payload.summary}` : 'We hope we could help!'} If you have any questions, feel free to reply here.`;
     const res = await fetch('https://api.gupshup.io/wa/api/v1/msg', {
         method: 'POST',
@@ -295,10 +314,8 @@ async function fireWhatsappTwilio(apiKey, config, payload) {
     const [accountSid, authToken] = apiKey.split(':');
     if (!accountSid || !authToken)
         throw new Error('Twilio WhatsApp apiKey format: accountSid:authToken');
-    const cfg = config;
-    if (!cfg?.fromNumber)
-        throw new Error('Twilio WhatsApp config needs fromNumber');
-    const to = cfg.toNumber || payload.callerNumber;
+    const cfg = TwilioWhatsappConfigSchema.parse(config);
+    const to = payload.callerNumber;
     const message = `Hi${payload.callerName ? ` ${payload.callerName}` : ''}! Thank you for speaking with ${payload.agentName}. ${payload.summary || 'We hope we could help!'}`;
     const credentials = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
     const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {

@@ -19,63 +19,122 @@ async function agentRoutes(app) {
     });
     // POST /agents — Create new agent
     app.post('/agents', { preHandler: auth_1.requireAuth }, async (request, reply) => {
-        const { workspaceId } = request.user;
-        const body = request.body;
-        // Validate: personaPrompt must be at least 50 characters
-        if (body.personaPrompt.length < 50) {
-            return reply.code(400).send({
-                error: 'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
+        try {
+            const { workspaceId } = request.user;
+            const body = request.body;
+            // ── Validate required fields ─────────────────────────────────────────────
+            if (!body.name?.trim()) {
+                return reply.status(400).send({ error: "Agent name is required" });
+            }
+            if (!body.personaPrompt?.trim() || body.personaPrompt.trim().length < 10) {
+                return reply.status(400).send({ error: "Persona prompt must be at least 10 characters" });
+            }
+            // ── Resolve provider config from tier/language ────────────────────────────
+            const language = body.language ?? "en";
+            const tierId = body.tierId ?? "efficient";
+            const gender = body.gender ?? "female";
+            const INDIAN = new Set(["hi", "gu", "mr", "ta", "te", "kn", "bn", "ml", "pa", "or"]);
+            const isIndian = INDIAN.has(language);
+            // Defaults — never crash on missing provider fields
+            const sttProvider = body.sttProvider ?? (isIndian ? "sarvam" : "deepgram");
+            const ttsProvider = body.ttsProvider ?? (isIndian ? "sarvam" : "elevenlabs");
+            const llmModel = body.llmModel ?? "gemini-2.0-flash";
+            const SARVAM_VOICES = {
+                hi: { female: "meera", male: "arjun" },
+                gu: { female: "diya", male: "neel" },
+                mr: { female: "priya", male: "rohan" },
+                ta: { female: "kavya", male: "karthik" },
+                te: { female: "anushka", male: "vikram" },
+            };
+            const voiceId = body.voiceId ?? (isIndian
+                ? (SARVAM_VOICES[language]?.[gender] ?? "meera")
+                : (gender === "male" ? "VR6AewLTigWG4xSOukaG" : "21m00Tcm4TlvDq8ikWAM"));
+            const agent = await prisma_1.prisma.agent.create({
+                data: {
+                    workspaceId,
+                    name: body.name.trim(),
+                    personaPrompt: body.personaPrompt.trim(),
+                    language,
+                    voiceId,
+                    voiceProvider: ttsProvider,
+                    sttProvider,
+                    llmModel,
+                    telephonyProvider: body.telephonyProvider ?? (isIndian ? "exotel" : "twilio"),
+                    tierId,
+                    useCaseId: body.useCaseId ?? "receptionist",
+                    isActive: false, // starts inactive — deploy separately
+                    industry: body.industry ?? "general",
+                },
             });
+            // Prefetch greeting audio into Redis (non-blocking — failure is safe)
+            prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider || 'elevenlabs');
+            return reply.status(201).send(agent);
         }
-        let parsedSchema = null;
-        if (body.extractionSchema) {
-            try {
-                parsedSchema = typeof body.extractionSchema === 'string'
-                    ? JSON.parse(body.extractionSchema)
-                    : body.extractionSchema;
+        catch (err) {
+            console.error("[POST /agents]", err.message);
+            if (err.code === "P2002") {
+                return reply.status(400).send({ error: "An agent with this name already exists" });
             }
-            catch {
-                // Invalid JSON in schema — ignore it and save without schema
-                parsedSchema = null;
-            }
+            return reply.status(500).send({ error: err.message ?? "Failed to create agent" });
         }
-        const agent = await prisma_1.prisma.agent.create({
-            data: {
-                ...body,
-                workspaceId,
-                extractionSchema: parsedSchema ?? undefined
-            }
-        });
-        // Prefetch greeting audio into Redis (non-blocking — failure is safe)
-        prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider);
-        return reply.code(201).send(agent);
     });
     // PATCH /agents/:id — Update agent
     app.patch('/agents/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
-        const { workspaceId } = request.user;
-        const { id } = request.params;
-        const body = request.body;
-        const existing = await prisma_1.prisma.agent.findFirst({ where: { id, workspaceId } });
-        if (!existing)
-            return reply.code(404).send({ error: 'Agent not found' });
-        let parsedSchema = undefined;
-        if (body.extractionSchema) {
-            try {
-                parsedSchema = typeof body.extractionSchema === 'string'
-                    ? JSON.parse(body.extractionSchema)
-                    : body.extractionSchema;
+        try {
+            const { workspaceId } = request.user;
+            const { id } = request.params;
+            const body = request.body;
+            // Verify agent belongs to this workspace
+            const existing = await prisma_1.prisma.agent.findFirst({ where: { id, workspaceId } });
+            if (!existing)
+                return reply.code(404).send({ error: 'Agent not found' });
+            const ALLOWED_AGENT_FIELDS = [
+                "name",
+                "personaPrompt",
+                "language",
+                "voiceProvider",
+                "voiceId",
+                "sttProvider",
+                "llmModel",
+                "useGeminiLive",
+                "industry",
+                "templateId",
+                "tierId",
+                "useCaseId",
+                "sttModel",
+                "ttsModel",
+                "ttsPace",
+                "ttsLoudness",
+                "isActive",
+                "knowledgeBaseId",
+            ];
+            const dataToUpdate = {};
+            for (const key of ALLOWED_AGENT_FIELDS) {
+                if (body[key] !== undefined) {
+                    dataToUpdate[key] = body[key];
+                }
             }
-            catch {
-                // Invalid JSON in schema — ignore and save without schema
-                parsedSchema = undefined;
+            // Handle extractionSchema separately due to potential JSON parsing
+            if (body.extractionSchema !== undefined) {
+                try {
+                    dataToUpdate.extractionSchema = typeof body.extractionSchema === 'string'
+                        ? (body.extractionSchema.trim() ? JSON.parse(body.extractionSchema) : null)
+                        : body.extractionSchema;
+                }
+                catch {
+                    dataToUpdate.extractionSchema = null;
+                }
             }
+            const updated = await prisma_1.prisma.agent.update({
+                where: { id },
+                data: dataToUpdate
+            });
+            return reply.send(updated);
         }
-        const dataToUpdate = { ...body };
-        if (parsedSchema !== undefined) {
-            dataToUpdate.extractionSchema = parsedSchema;
+        catch (err) {
+            console.error("[PATCH /api/agents/:id]", err);
+            return reply.code(500).send({ error: err.message ?? "Failed to update agent" });
         }
-        const updated = await prisma_1.prisma.agent.update({ where: { id }, data: dataToUpdate });
-        return reply.send(updated);
     });
     // DELETE /agents/:id
     app.delete('/agents/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
@@ -218,7 +277,10 @@ async function prefetchGreeting(agentId, prompt, voiceId, voiceProvider) {
         const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000';
         const response = await fetch(`${workerUrl}/prefetch-greeting`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+            },
             body: JSON.stringify({
                 agent_id: agentId, // snake_case — matches Python Pydantic model
                 prompt,

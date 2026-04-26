@@ -45,7 +45,16 @@ app.register(rawBody, {
 })
 
 app.register(cors, {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || false,
+  origin: (origin, cb) => {
+    // Allow local development, any vercel deployment, or explicitly allowed origins
+    if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.vercel.app')) {
+      return cb(null, true)
+    }
+    const allowed = process.env.ALLOWED_ORIGINS?.split(',') || []
+    if (allowed.includes(origin)) return cb(null, true)
+    
+    cb(new Error('Not allowed by CORS'), false)
+  },
   credentials: true
 })
 app.register(jwt, { secret: process.env.JWT_SECRET! })

@@ -109,42 +109,40 @@ NEVER: Say "As an AI", list >3 items, ask 2 questions at once, use bullet points
     {
         id: "premium",
         name: "Premium",
-        tagline: "Human-level emotional depth — closest to Rumik/Sesame quality",
+        tagline: "Human-level emotional depth and reasoning",
         costPerMinUSD: 0.045,
         costPer1000Calls: 225,
-        badge: "Highest Quality",
+        badge: "Human-Level",
         badgeColor: "bg-purple-100 text-purple-700",
         latencyMs: 300,
-        bestFor: ["ai_companion", "mental_health", "vip_support", "premium_sales"],
+        bestFor: ["ai_companion", "mental_health", "vip_support"],
         notRecommendedFor: [],
         indian: {
             sttProvider: "sarvam",
             sttModel: "saaras:v3",
             sttMode: "realtime_balanced",
-            ttsProvider: "sarvam", // Sarvam Bulbul V3 is best for Indian Premium
-            ttsModel: "bulbul:v3",
-            ttsPace: 0.95, // slightly slower = more thoughtful/human
-            ttsLoudness: 1.3,
-            llmModel: "gemini-2.5-flash", // best available; upgrade to 3.1 when GA
-            llmLabel: "Gemini 2.5 Flash (Premium)",
+            ttsProvider: "elevenlabs",
+            ttsModel: "eleven_multilingual_v2",
+            ttsPace: 0.95,
+            ttsLoudness: 1.2,
+            llmModel: "claude-3-5-sonnet",
+            llmLabel: "Claude 3.5 Sonnet",
         },
         international: {
             sttProvider: "deepgram",
             ttsProvider: "elevenlabs",
             ttsModel: "eleven_turbo_v2_5",
-            llmModel: "gemini-2.5-flash",
-            llmLabel: "Gemini 2.5 Flash (Premium)",
+            llmModel: "claude-3-5-sonnet",
+            llmLabel: "Claude 3.5 Sonnet",
         },
         voicePromptAddition: `
 === PREMIUM TIER — VOICE RULES ===
 EMOTIONAL INTELLIGENCE: Read the emotional state of every caller message.
   Respond to the emotion FIRST, then to the content.
   Example: Caller says "I've been waiting 3 days for a response" →
-  WRONG: "I can check your order status right now."
   RIGHT: "That sounds really frustrating — 3 days is too long to wait. Let me look into this right now."
 
 PACING: Use natural pauses. Short sentences after emotional moments.
-  Example: "That's really difficult. Tell me more about what happened."
 
 WARMTH MARKERS: Use these naturally (don't overuse — max once per 4 turns):
   Hindi: "aap ki baat sun ke accha laga", "main aapke saath hoon"
@@ -155,6 +153,43 @@ ACTIVE LISTENING: Occasionally reflect back what you heard.
 
 NEVER RUSH: Never say "quickly" or "just a moment". Take time with caller.
 NEVER DISMISS: Never say "that's a common issue" — it minimizes their concern.
+=== END ===`,
+    },
+    // ── TIER 4: GEMINI LIVE HD ────────────────────────────────────────────────
+    {
+        id: "gemini_live",
+        name: "Gemini Live HD",
+        tagline: "⚡ Ultra-low latency native audio (<300ms) — English only",
+        costPerMinUSD: 0.025,
+        costPer1000Calls: 125,
+        badge: "Lightning Fast",
+        badgeColor: "bg-amber-100 text-amber-700",
+        latencyMs: 250,
+        bestFor: ["appointment", "customer_support", "ai_companion"],
+        notRecommendedFor: ["indian"],
+        indian: {
+            sttProvider: "sarvam",
+            sttModel: "saaras:v3",
+            sttMode: "realtime_balanced",
+            ttsProvider: "sarvam",
+            ttsModel: "bulbul:v3",
+            ttsPace: 1.0,
+            ttsLoudness: 1.5,
+            llmModel: "gemini-2.0-flash",
+            llmLabel: "Gemini 2.0 Flash",
+        },
+        international: {
+            sttProvider: "google",
+            ttsProvider: "google",
+            ttsModel: "gemini-live",
+            llmModel: "gemini-2.0-flash",
+            llmLabel: "Gemini 2.0 Flash (Live)",
+        },
+        voicePromptAddition: `
+=== GEMINI LIVE TIER — VOICE RULES ===
+NATURAL FLOW: Speak with native speed. Use natural interruptions.
+CONCISENESS: Keep responses extremely short. 1-2 sentences max.
+SPEED: Respond immediately. No filler words needed as latency is native.
 === END ===`,
     },
 ];

@@ -25,9 +25,13 @@ async function knowledgeRoutes(app) {
         const fileBase64 = fileBuffer.toString('base64');
         const fileType = file.mimetype.includes('pdf') ? 'pdf' : 'text';
         // Send to Python worker — snake_case matches EmbedRequest Pydantic model
-        const response = await fetch('http://localhost:8000/embed-document', {
+        const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000';
+        const response = await fetch(`${workerUrl}/embed-document`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Internal-Key': process.env.INTERNAL_API_KEY || 'dev-internal-key'
+            },
             body: JSON.stringify({
                 agent_id: agentId, // snake_case
                 file_name: file.filename, // snake_case
