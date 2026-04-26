@@ -3,6 +3,8 @@ import twilio from 'twilio'
 import { prisma } from '../lib/prisma'
 import { getWorkerUrl } from '../lib/env'
 import { requireAuth } from '../middleware/auth'
+import { runSimulationBatch, simulationJobs } from '../lib/simulator'
+import { randomUUID } from 'crypto'
 
 export async function agentRoutes(app: FastifyInstance) {
 
@@ -192,56 +194,44 @@ export async function agentRoutes(app: FastifyInstance) {
       maxTurns?: number
     }
 
-    // Fetch full agent (need persona_prompt)
-    const agent = await prisma.agent.findFirst({
-      where: { id, workspaceId }
-    })
+    if (numSimulations > 50) return reply.code(400).send({ error: 'Maximum 50 simulations per batch' })
+    if (maxTurns > 15) return reply.code(400).send({ error: 'Maximum 15 turns per call' })
+
+    const agent = await prisma.agent.findFirst({ where: { id, workspaceId } })
     if (!agent) return reply.code(404).send({ error: 'Agent not found' })
+    if (!agent.personaPrompt || agent.personaPrompt.length < 50) {
+      return reply.code(400).send({ error: 'Agent persona prompt is too short (min 50 chars)' })
+    }
 
-    // Start simulation job on Python worker
-    const workerUrl = getWorkerUrl()
-    
-    let res;
-    try {
-      res = await fetch(`${workerUrl}/simulate/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agent_id: id,
-          persona_prompt: agent.personaPrompt,
-          num_simulations: numSimulations,
-          max_turns: maxTurns,
-        })
+    const jobId = randomUUID()
+    simulationJobs.set(jobId, { status: 'running', results: null, error: null, started_at: Date.now() })
+
+    // Run in background — don't await
+    runSimulationBatch(agent.personaPrompt, numSimulations, maxTurns)
+      .then(results => {
+        simulationJobs.set(jobId, { status: 'completed', results, error: null, started_at: simulationJobs.get(jobId)!.started_at })
       })
-    } catch (err: any) {
-      console.error('[SIMULATE START] Worker unreachable:', err.message)
-      return reply.code(502).send({ error: 'Voice worker is unreachable. Ensure the Python worker is running.' })
-    }
+      .catch((err: Error) => {
+        simulationJobs.set(jobId, { status: 'failed', results: null, error: err.message, started_at: simulationJobs.get(jobId)!.started_at })
+      })
 
-    if (!res.ok) {
-      const err = await res.json()
-      return reply.code(res.status).send(err)
-    }
-
-    return reply.send(await res.json())
+    return reply.send({
+      job_id: jobId,
+      status: 'running',
+      message: `Running ${numSimulations} adversarial simulations.`,
+      estimated_seconds: numSimulations * 3
+    })
   })
 
   /**
    * GET /agents/:id/simulate/:jobId
    * Poll for simulation results.
-   * When status === "completed", results contains full report.
    */
   app.get('/agents/:id/simulate/:jobId', { preHandler: requireAuth }, async (request, reply) => {
     const { jobId } = request.params as { id: string; jobId: string }
-
-    const isProd = process.env.NODE_ENV === 'production'
-    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
-    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
-
-    const res = await fetch(`${workerUrl}/simulate/status/${jobId}`)
-    if (!res.ok) return reply.code(404).send({ error: 'Job not found' })
-
-    return reply.send(await res.json())
+    const job = simulationJobs.get(jobId)
+    if (!job) return reply.code(404).send({ error: 'Job not found' })
+    return reply.send(job)
   })
 
   /**
