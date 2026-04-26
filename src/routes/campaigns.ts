@@ -24,6 +24,26 @@ export async function campaignRoutes(app: FastifyInstance) {
   })
 
   /**
+   * GET /campaigns/:id
+   * Get a single campaign by ID with contact stats.
+   */
+  app.get('/campaigns/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { id } = request.params as { id: string }
+
+    const campaign = await prisma.campaign.findFirst({
+      where: { id, workspaceId },
+      include: {
+        agent: { select: { name: true } },
+        _count: { select: { contacts: true } }
+      }
+    })
+
+    if (!campaign) return reply.code(404).send({ error: 'Campaign not found' })
+    return reply.send(campaign)
+  })
+
+  /**
    * POST /campaigns
    * Create a new campaign in draft state.
    */
