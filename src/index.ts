@@ -32,7 +32,6 @@ import { campaignRoutes } from './routes/campaigns'
 import { settingsRoutes } from './routes/settings'
 import { aiRoutes } from './routes/ai'
 import { integrationRoutes } from './routes/integrations'
-
 const app = Fastify({ logger: true })
 
 // FIX 1: Register raw body BEFORE any routes — required for Stripe webhook signature verification

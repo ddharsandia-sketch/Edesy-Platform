@@ -17,64 +17,74 @@ export async function agentRoutes(app: FastifyInstance) {
 
   // POST /agents — Create new agent
   app.post('/agents', { preHandler: requireAuth }, async (request, reply) => {
-    const { workspaceId } = request.user as { workspaceId: string }
-    const body = request.body as {
-      name: string
-      personaPrompt: string
-      language?: string
-      voiceProvider?: string
-      voiceId?: string
-      sttProvider?: string
-      llmModel?: string
-      useGeminiLive?: boolean
-      extractionSchema?: string | object
-      templateId?: string
-      // These come from the wizard but are NOT Prisma columns:
-      tierId?: string
-      useCaseId?: string
-    }
+    try {
+      const { workspaceId } = request.user as { workspaceId: string }
+      const body = request.body as Record<string, any>;
 
-    // Validate: personaPrompt must be at least 50 characters
-    if (!body.personaPrompt || body.personaPrompt.length < 50) {
-      return reply.code(400).send({
-        error:
-          'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
-      })
-    }
-
-    let parsedSchema = null
-    if (body.extractionSchema) {
-      try {
-        parsedSchema = typeof body.extractionSchema === 'string' 
-          ? JSON.parse(body.extractionSchema) 
-          : body.extractionSchema
-      } catch {
-        // Invalid JSON in schema — ignore it and save without schema
-        parsedSchema = null
+      // ── Validate required fields ─────────────────────────────────────────────
+      if (!body.name?.trim()) {
+        return reply.status(400).send({ error: "Agent name is required" });
       }
-    }
-
-    // Only pass fields that exist in the Prisma Agent model
-    const agent = await prisma.agent.create({
-      data: { 
-        workspaceId,
-        name: body.name,
-        personaPrompt: body.personaPrompt,
-        language: body.language ?? 'en',
-        voiceProvider: body.voiceProvider ?? 'cartesia',
-        voiceId: body.voiceId ?? '21m00Tcm4TlvDq8ikWAM',
-        sttProvider: body.sttProvider ?? 'deepgram',
-        llmModel: body.llmModel ?? 'gpt-4o-mini',
-        useGeminiLive: body.tierId === 'gemini_live' || (body.useGeminiLive ?? false),
-        templateId: body.templateId ?? null,
-        extractionSchema: parsedSchema ?? undefined
+      if (!body.personaPrompt?.trim() || body.personaPrompt.trim().length < 10) {
+        return reply.status(400).send({ error: "Persona prompt must be at least 10 characters" });
       }
-    })
 
-    // Prefetch greeting audio into Redis (non-blocking — failure is safe)
-    prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider)
+      // ── Resolve provider config from tier/language ────────────────────────────
+      const language   = body.language ?? "en";
+      const tierId     = body.tierId   ?? "efficient";
+      const gender     = body.gender   ?? "female";
 
-    return reply.code(201).send(agent)
+      const INDIAN = new Set(["hi","gu","mr","ta","te","kn","bn","ml","pa","or"]);
+      const isIndian = INDIAN.has(language);
+
+      // Defaults — never crash on missing provider fields
+      const sttProvider = body.sttProvider ?? (isIndian ? "sarvam" : "deepgram");
+      const ttsProvider = body.ttsProvider ?? (isIndian ? "sarvam" : "elevenlabs");
+      const llmModel    = body.llmModel    ?? "gemini-2.0-flash";
+
+      const SARVAM_VOICES: Record<string, Record<string, string>> = {
+        hi: { female: "meera",  male: "arjun"   },
+        gu: { female: "diya",   male: "neel"    },
+        mr: { female: "priya",  male: "rohan"   },
+        ta: { female: "kavya",  male: "karthik" },
+        te: { female: "anushka",male: "vikram"  },
+      };
+      const voiceId = body.voiceId ?? (
+        isIndian
+          ? (SARVAM_VOICES[language]?.[gender] ?? "meera")
+          : (gender === "male" ? "VR6AewLTigWG4xSOukaG" : "21m00Tcm4TlvDq8ikWAM")
+      );
+
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId,
+          name:              body.name.trim(),
+          personaPrompt:     body.personaPrompt.trim(),
+          language,
+          voiceId,
+          voiceProvider:     ttsProvider,
+          sttProvider,
+          llmModel,
+          telephonyProvider: body.telephonyProvider ?? (isIndian ? "exotel" : "twilio"),
+          tierId,
+          useCaseId:         body.useCaseId  ?? "receptionist",
+          isActive:          false,   // starts inactive — deploy separately
+          industry:          body.industry   ?? "general",
+        },
+      });
+
+      // Prefetch greeting audio into Redis (non-blocking — failure is safe)
+      prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider || 'elevenlabs')
+
+      return reply.status(201).send(agent);
+
+    } catch (err: any) {
+      console.error("[POST /agents]", err.message);
+      if (err.code === "P2002") {
+        return reply.status(400).send({ error: "An agent with this name already exists" });
+      }
+      return reply.status(500).send({ error: err.message ?? "Failed to create agent" });
+    }
   })
 
   // PATCH /agents/:id — Update agent

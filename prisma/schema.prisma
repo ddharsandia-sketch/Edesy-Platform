@@ -47,6 +47,10 @@ model Workspace {
   phoneNumbers         PhoneNumber[]
   providerCredentials  ProviderCredentials?
   webhooks             Webhook[]
+  googleAccessToken    String?
+  googleRefreshToken   String?
+  googleTokenExpiry    DateTime?
+  knowledgeDocuments   KnowledgeBaseDocument[]
 }
 
 model ProviderCredentials {
@@ -94,6 +98,8 @@ model Agent {
   extractionSchema Json?
   knowledgeBaseId  String?
   sttModel         String?
+  telephonyProvider String  @default("twilio")
+  phoneNumber      String?
   tierId           String?
   ttsLoudness      Float?         @default(1.0)
   ttsModel         String?
@@ -239,4 +245,17 @@ model CampaignContact {
 
   @@index([campaignId, status])
   @@index([phoneNumber])
+}
+
+model KnowledgeBaseDocument {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  fileType    String
+  sizeBytes   Int
+  s3Key       String
+  status      String   @default("pending")
+  chunkCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
