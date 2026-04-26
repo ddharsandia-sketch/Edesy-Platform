@@ -448,7 +448,7 @@ export async function callRoutes(app: FastifyInstance) {
         DATE_TRUNC('day', "startTime")::date::text AS date,
         COUNT(*) AS count
       FROM "Call"
-      WHERE "workspaceId" = CAST(${workspaceId} AS UUID)
+      WHERE "workspaceId" = ${workspaceId}::uuid
         AND "startTime" >= ${since}
       GROUP BY DATE_TRUNC('day', "startTime")
       ORDER BY date ASC
