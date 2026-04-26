@@ -165,7 +165,8 @@ async function agentRoutes(app) {
         if (!agent)
             return reply.code(404).send({ error: 'Agent not found' });
         // Start simulation job on Python worker
-        const res = await fetch('http://localhost:8000/simulate/start', {
+        const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000';
+        const res = await fetch(`${workerUrl}/simulate/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

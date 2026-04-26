@@ -57,6 +57,24 @@ async function campaignRoutes(app) {
         return reply.send(campaigns);
     });
     /**
+     * GET /campaigns/:id
+     * Get a single campaign by ID with contact stats.
+     */
+    app.get('/campaigns/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
+        const { id } = request.params;
+        const campaign = await prisma_1.prisma.campaign.findFirst({
+            where: { id, workspaceId },
+            include: {
+                agent: { select: { name: true } },
+                _count: { select: { contacts: true } }
+            }
+        });
+        if (!campaign)
+            return reply.code(404).send({ error: 'Campaign not found' });
+        return reply.send(campaign);
+    });
+    /**
      * POST /campaigns
      * Create a new campaign in draft state.
      */

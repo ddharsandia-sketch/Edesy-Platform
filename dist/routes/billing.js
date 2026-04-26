@@ -1,16 +1,10 @@
 "use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PLAN_LIMITS = void 0;
 exports.billingRoutes = billingRoutes;
-const stripe_1 = __importDefault(require("stripe"));
 const prisma_1 = require("../lib/prisma");
 const auth_1 = require("../middleware/auth");
-const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, {
-    apiVersion: '2026-04-22.dahlia',
-});
+const paypal_1 = require("../lib/paypal");
 exports.PLAN_LIMITS = {
     free: { minutesPerMonth: 100, agentsMax: 1, callsPerMonth: 50, label: 'Free', price: 0 },
     starter: { minutesPerMonth: 2000, agentsMax: 3, callsPerMonth: 1000, label: 'Starter', price: 49 },
@@ -18,24 +12,26 @@ exports.PLAN_LIMITS = {
     professional: { minutesPerMonth: 10000, agentsMax: 10, callsPerMonth: 5000, label: 'Professional', price: 149 },
     enterprise: { minutesPerMonth: 999999, agentsMax: 999, callsPerMonth: 999999, label: 'Enterprise', price: 499 },
 };
-const PRICE_MAP = {
-    starter: process.env.STRIPE_PRICE_ID_STARTER,
-    growth: process.env.STRIPE_PRICE_ID_GROWTH,
-    professional: process.env.STRIPE_PRICE_ID_GROWTH, // alias
-    enterprise: process.env.STRIPE_PRICE_ID_ENTERPRISE,
+// PayPal plan ID mapping — uses real PayPal subscription plan IDs
+const PAYPAL_PLAN_MAP = {
+    starter: process.env.PAYPAL_STARTER_PLAN_ID || 'P-44Y27456J85920417NHSMPCQ',
+    growth: process.env.PAYPAL_GROWTH_PLAN_ID || 'P-7AE19890VX992554KNHSMPSA',
+    professional: process.env.PAYPAL_GROWTH_PLAN_ID || 'P-7AE19890VX992554KNHSMPSA',
+    enterprise: process.env.PAYPAL_ENTERPRISE_PLAN_ID || 'P-2GX1955558393463KNHSMP7Y',
 };
 async function billingRoutes(app) {
-    // ── GET /billing/plans — public ───────────────────────────────────────────
+    // ── GET /billing/plans — public ──────────────────────────────────────────────
     app.get('/billing/plans', async (_req, reply) => {
         return reply.send(Object.entries(exports.PLAN_LIMITS).map(([tier, cfg]) => ({ tier, ...cfg })));
     });
-    // ── GET /billing/subscription — current plan + usage ─────────────────────
+    // ── GET /billing/subscription — current plan + usage ─────────────────────────
+    // Also aliased as /billing/status for frontend compatibility
     app.get('/billing/subscription', { preHandler: auth_1.requireAuth }, async (request, reply) => {
         try {
             const { workspaceId } = request.user;
             const workspace = await prisma_1.prisma.workspace.findUnique({
                 where: { id: workspaceId },
-                select: { planTier: true, plan: true, planExpiresAt: true, stripeSubscriptionId: true },
+                select: { planTier: true, plan: true, planExpiresAt: true, paypalSubscriptionId: true },
             });
             if (!workspace)
                 return reply.code(404).send({ error: 'Workspace not found' });
@@ -51,6 +47,8 @@ async function billingRoutes(app) {
             const limits = exports.PLAN_LIMITS[tier] ?? exports.PLAN_LIMITS.free;
             return reply.send({
                 tier,
+                plan: tier,
+                status: workspace.paypalSubscriptionId ? 'active' : (tier === 'free' ? 'free' : 'active'),
                 limits,
                 usage: {
                     minutesUsed,
@@ -64,100 +62,130 @@ async function billingRoutes(app) {
             return reply.code(500).send({ error: err.message });
         }
     });
-    // ── POST /billing/checkout — Stripe Checkout session (card, no PayPal) ────
-    app.post('/billing/checkout', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+    // ── GET /billing/status — alias for frontend compatibility ────────────────────
+    app.get('/billing/status', { preHandler: auth_1.requireAuth }, async (request, reply) => {
         try {
             const { workspaceId } = request.user;
-            // Accept both "tier" (new) and "plan" (legacy) field names
-            const body = request.body;
-            const tier = body.tier ?? body.plan ?? '';
-            if (!['starter', 'growth', 'professional', 'enterprise'].includes(tier)) {
-                return reply.code(400).send({ error: `Invalid plan tier: ${tier}` });
-            }
-            const priceId = PRICE_MAP[tier];
-            if (!priceId) {
-                return reply.code(500).send({ error: `Stripe price not configured for '${tier}'. Add STRIPE_PRICE_ID_${tier.toUpperCase()} to env.` });
-            }
             const workspace = await prisma_1.prisma.workspace.findUnique({
                 where: { id: workspaceId },
-                select: { id: true, name: true, stripeCustomerId: true },
+                select: { planTier: true, plan: true, paypalSubscriptionId: true },
             });
             if (!workspace)
                 return reply.code(404).send({ error: 'Workspace not found' });
-            let customerId = workspace.stripeCustomerId;
-            if (!customerId) {
-                const customer = await stripe.customers.create({ name: workspace.name, metadata: { workspaceId } });
-                customerId = customer.id;
-                await prisma_1.prisma.workspace.update({ where: { id: workspaceId }, data: { stripeCustomerId: customerId } });
-            }
-            const session = await stripe.checkout.sessions.create({
-                customer: customerId,
-                mode: 'subscription',
-                line_items: [{ price: priceId, quantity: 1 }],
-                payment_method_collection: 'always',
-                success_url: `${process.env.FRONTEND_URL}/dashboard/settings?billing=success&plan=${tier}`,
-                cancel_url: `${process.env.FRONTEND_URL}/dashboard/settings?billing=cancelled`,
-                metadata: { workspaceId, tier, plan: tier },
+            const tier = (workspace.planTier || workspace.plan || 'free');
+            const limits = exports.PLAN_LIMITS[tier] ?? exports.PLAN_LIMITS.free;
+            return reply.send({
+                tier,
+                plan: tier,
+                status: workspace.paypalSubscriptionId ? 'active' : 'free',
+                limits,
             });
-            // Return BOTH field names for forward + backward compat
-            return reply.send({ checkoutUrl: session.url, url: session.url });
+        }
+        catch (err) {
+            return reply.code(500).send({ error: err.message });
+        }
+    });
+    // ── POST /billing/checkout — Create a PayPal Subscription ───────────────────
+    app.post('/billing/checkout', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        try {
+            const { workspaceId } = request.user;
+            // Accept tier, plan, or planId — all are valid
+            const body = request.body;
+            const tier = body.tier ?? body.plan ?? body.planId ?? '';
+            if (!['starter', 'growth', 'professional', 'enterprise'].includes(tier)) {
+                return reply.code(400).send({ error: `Invalid plan tier: "${tier}". Must be starter, growth, professional, or enterprise.` });
+            }
+            const paypalPlanId = PAYPAL_PLAN_MAP[tier];
+            if (!paypalPlanId) {
+                return reply.code(500).send({ error: `PayPal plan not configured for '${tier}'.` });
+            }
+            // Create PayPal subscription
+            const subscription = await (0, paypal_1.createSubscription)(paypalPlanId, workspaceId);
+            // Extract the approval URL for redirect
+            const approvalLink = subscription.links?.find((l) => l.rel === 'approve');
+            if (!approvalLink) {
+                return reply.code(500).send({ error: 'PayPal did not return an approval URL.' });
+            }
+            return reply.send({
+                checkoutUrl: approvalLink.href,
+                url: approvalLink.href,
+                subscriptionId: subscription.id,
+                provider: 'paypal',
+            });
         }
         catch (err) {
             console.error('[billing/checkout]', err.message);
             return reply.code(500).send({ error: err.message });
         }
     });
-    // ── POST /billing/portal — manage existing subscription ───────────────────
+    // ── POST /billing/portal — Redirect to PayPal subscription management ────────
     app.post('/billing/portal', { preHandler: auth_1.requireAuth }, async (request, reply) => {
         try {
             const { workspaceId } = request.user;
             const workspace = await prisma_1.prisma.workspace.findUnique({
                 where: { id: workspaceId },
-                select: { stripeCustomerId: true },
+                select: { paypalSubscriptionId: true },
             });
-            if (!workspace?.stripeCustomerId) {
-                return reply.code(400).send({ error: 'No billing account found. Subscribe first.' });
+            if (!workspace?.paypalSubscriptionId) {
+                return reply.code(400).send({ error: 'No active PayPal subscription found. Subscribe first.' });
             }
-            const portal = await stripe.billingPortal.sessions.create({
-                customer: workspace.stripeCustomerId,
-                return_url: `${process.env.FRONTEND_URL}/dashboard/settings`,
-            });
-            // Return both field names for compat
-            return reply.send({ portalUrl: portal.url, url: portal.url });
+            // PayPal doesn't have a customer portal like Stripe — redirect to PayPal account
+            const portalUrl = `https://www.paypal.com/myaccount/autopay/`;
+            return reply.send({ portalUrl, url: portalUrl });
         }
         catch (err) {
-            console.error('[billing/portal]', err.message);
             return reply.code(500).send({ error: err.message });
         }
     });
-    // ── POST /billing/webhook — Stripe events ────────────────────────────────
+    // ── POST /billing/webhook — PayPal webhook events ─────────────────────────────
     app.post('/billing/webhook', async (request, reply) => {
-        const sig = request.headers['stripe-signature'];
-        const body = request.rawBody ?? JSON.stringify(request.body);
-        let event;
-        try {
-            event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-        }
-        catch (err) {
-            return reply.code(400).send({ error: `Webhook error: ${err.message}` });
-        }
-        if (event.type === 'checkout.session.completed') {
-            const s = event.data.object;
-            const workspaceId = s.metadata?.workspaceId;
-            const tier = s.metadata?.tier ?? s.metadata?.plan;
-            if (workspaceId && tier) {
-                await prisma_1.prisma.workspace.update({
-                    where: { id: workspaceId },
-                    data: { planTier: tier, plan: tier, stripeSubscriptionId: s.subscription },
-                });
+        const rawBody = request.rawBody ?? Buffer.from(JSON.stringify(request.body));
+        const bodyStr = typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
+        // Verify PayPal webhook signature
+        const isValid = await (0, paypal_1.verifyWebhookSignature)(bodyStr, request.headers).catch(() => false);
+        if (!isValid) {
+            console.warn('[PAYPAL] Webhook signature verification failed');
+            // Still process in dev/when PAYPAL_WEBHOOK_ID is not set
+            if (process.env.NODE_ENV === 'production' && process.env.PAYPAL_WEBHOOK_ID) {
+                return reply.code(400).send({ error: 'Webhook verification failed' });
             }
         }
-        if (event.type === 'customer.subscription.deleted') {
-            const sub = event.data.object;
-            await prisma_1.prisma.workspace.updateMany({
-                where: { stripeSubscriptionId: sub.id },
-                data: { planTier: 'free', plan: 'free' },
-            });
+        const event = request.body;
+        console.log(`[PAYPAL] Event: ${event.event_type}`);
+        // Subscription activated
+        if (event.event_type === 'BILLING.SUBSCRIPTION.ACTIVATED') {
+            const subscriptionId = event.resource?.id;
+            const workspaceId = event.resource?.custom_id;
+            const planId = event.resource?.plan_id;
+            // Map PayPal plan ID back to our tier
+            const tier = Object.entries(PAYPAL_PLAN_MAP).find(([, pid]) => pid === planId)?.[0] || 'starter';
+            if (workspaceId) {
+                await prisma_1.prisma.workspace.update({
+                    where: { id: workspaceId },
+                    data: {
+                        plan: tier,
+                        planTier: tier,
+                        paypalSubscriptionId: subscriptionId,
+                    },
+                });
+                console.log(`[PAYPAL] Workspace ${workspaceId} activated on '${tier}'`);
+            }
+        }
+        // Payment completed
+        if (event.event_type === 'PAYMENT.SALE.COMPLETED') {
+            console.log(`[PAYPAL] Payment received: ${event.resource?.amount?.total} ${event.resource?.amount?.currency}`);
+        }
+        // Subscription cancelled or suspended
+        if (event.event_type === 'BILLING.SUBSCRIPTION.CANCELLED' ||
+            event.event_type === 'BILLING.SUBSCRIPTION.SUSPENDED') {
+            const subscriptionId = event.resource?.id;
+            if (subscriptionId) {
+                await prisma_1.prisma.workspace.updateMany({
+                    where: { paypalSubscriptionId: subscriptionId },
+                    data: { planTier: 'free', plan: 'free' },
+                });
+                console.log(`[PAYPAL] Subscription ${subscriptionId} cancelled — downgraded to free`);
+            }
         }
         return reply.send({ received: true });
     });

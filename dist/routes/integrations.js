@@ -35,31 +35,11 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.integrationRoutes = integrationRoutes;
 const prisma_1 = require("../lib/prisma");
+const auth_1 = require("../middleware/auth");
 async function integrationRoutes(fastify) {
-    // Auth helper
-    async function getWorkspaceId(request, reply) {
-        try {
-            await request.jwtVerify();
-            const workspace = await prisma_1.prisma.workspace.findFirst({
-                where: { ownerId: request.user.id },
-                select: { id: true },
-            });
-            if (!workspace) {
-                reply.status(403).send({ error: 'No workspace found' });
-                return null;
-            }
-            return workspace.id;
-        }
-        catch {
-            reply.status(401).send({ error: 'Unauthorized' });
-            return null;
-        }
-    }
     // GET /integrations — list all integrations for workspace
-    fastify.get('/integrations', async (request, reply) => {
-        const workspaceId = await getWorkspaceId(request, reply);
-        if (!workspaceId)
-            return;
+    fastify.get('/integrations', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
         const integrations = await prisma_1.prisma.integration.findMany({
             where: { workspaceId },
             orderBy: { createdAt: 'asc' },
@@ -77,10 +57,8 @@ async function integrationRoutes(fastify) {
         return reply.send(integrations);
     });
     // POST /integrations — create or update an integration
-    fastify.post('/integrations', async (request, reply) => {
-        const workspaceId = await getWorkspaceId(request, reply);
-        if (!workspaceId)
-            return;
+    fastify.post('/integrations', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
         const { type, label, apiKey, config, enabled } = request.body;
         if (!type || !label || !apiKey) {
             return reply.status(400).send({ error: 'type, label, and apiKey are required' });
@@ -104,10 +82,8 @@ async function integrationRoutes(fastify) {
         return reply.send({ success: true, id: integration.id });
     });
     // PATCH /integrations/:id — toggle enabled / update config
-    fastify.patch('/integrations/:id', async (request, reply) => {
-        const workspaceId = await getWorkspaceId(request, reply);
-        if (!workspaceId)
-            return;
+    fastify.patch('/integrations/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
         const { id } = request.params;
         const body = request.body;
         const integration = await prisma_1.prisma.integration.findFirst({
@@ -131,10 +107,8 @@ async function integrationRoutes(fastify) {
         return reply.send({ success: true, enabled: updated.enabled });
     });
     // DELETE /integrations/:id
-    fastify.delete('/integrations/:id', async (request, reply) => {
-        const workspaceId = await getWorkspaceId(request, reply);
-        if (!workspaceId)
-            return;
+    fastify.delete('/integrations/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
         const { id } = request.params;
         const integration = await prisma_1.prisma.integration.findFirst({ where: { id, workspaceId } });
         if (!integration)
@@ -143,10 +117,8 @@ async function integrationRoutes(fastify) {
         return reply.send({ success: true });
     });
     // POST /integrations/:id/test — fire a test payload to validate credentials
-    fastify.post('/integrations/:id/test', async (request, reply) => {
-        const workspaceId = await getWorkspaceId(request, reply);
-        if (!workspaceId)
-            return;
+    fastify.post('/integrations/:id/test', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
         const { id } = request.params;
         const integration = await prisma_1.prisma.integration.findFirst({ where: { id, workspaceId } });
         if (!integration)
@@ -168,7 +140,6 @@ async function integrationRoutes(fastify) {
         };
         try {
             const { triggerIntegrations } = await Promise.resolve().then(() => __importStar(require('../lib/integrations')));
-            // Only fire this specific integration
             await triggerIntegrations(workspaceId, testPayload);
             return reply.send({ success: true, message: 'Test payload sent' });
         }

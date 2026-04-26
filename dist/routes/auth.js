@@ -91,9 +91,14 @@ async function authRoutes(app) {
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error)
             return reply.code(401).send({ error: 'Invalid credentials' });
-        const workspace = await prisma_1.prisma.workspace.findFirst({ where: { ownerId: data.user.id } });
-        if (!workspace)
-            return reply.code(404).send({ error: 'Workspace not found' });
+        let workspace = await prisma_1.prisma.workspace.findFirst({ where: { ownerId: data.user.id } });
+        if (!workspace) {
+            // Auto-create workspace if missing (fixes UI signup disconnect)
+            const workspaceName = data.user.user_metadata?.workspace_name || `${email}'s Workspace`;
+            workspace = await prisma_1.prisma.workspace.create({
+                data: { name: workspaceName, ownerId: data.user.id, plan: 'free' }
+            });
+        }
         const isFounder = email === 'jabir.islam@gau.edu.ge';
         if (isFounder && workspace.plan !== 'enterprise') {
             await prisma_1.prisma.workspace.update({

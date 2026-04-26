@@ -110,7 +110,7 @@ export async function billingRoutes(app: FastifyInstance) {
       }
 
       // Create PayPal subscription
-      const subscription = await createSubscription(paypalPlanId, workspaceId)
+      const subscription = await createSubscription(paypalPlanId, workspaceId) as any
 
       // Extract the approval URL for redirect
       const approvalLink = subscription.links?.find((l: any) => l.rel === 'approve')
