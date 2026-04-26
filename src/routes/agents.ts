@@ -184,7 +184,9 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!agent) return reply.code(404).send({ error: 'Agent not found' })
 
     // Start simulation job on Python worker
-    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
+    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
     const res = await fetch(`${workerUrl}/simulate/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -318,7 +320,9 @@ async function prefetchGreeting(
   voiceProvider: string
 ) {
   try {
-    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
+    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
     const response = await fetch(`${workerUrl}/prefetch-greeting`, {
       method: 'POST',
       headers: { 
