@@ -162,7 +162,7 @@ async function authRoutes(app) {
                 });
             }
         }
-        const frontendUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://edesymkc.vercel.app';
+        const frontendUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://voxpilot-app.vercel.app';
         return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=success`);
     });
 }
