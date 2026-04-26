@@ -83,7 +83,7 @@ Output the prompt directly. No intro text. No markdown headers.`;
             }
         }
         // Gemini fallback
-        return callGemini(`${systemMsg}\n\nShort description: ${description}`, geminiKey);
+        return await callGemini(`${systemMsg}\n\nShort description: ${description}`, geminiKey);
     }
     catch (error) {
         console.error('[AI] All providers failed for magic prompt:', error.message.replace(/key=\w+/g, 'key=***'));
