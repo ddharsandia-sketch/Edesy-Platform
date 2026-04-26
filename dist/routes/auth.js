@@ -162,7 +162,11 @@ async function authRoutes(app) {
                 });
             }
         }
-        const frontendUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://voxpilot-app.vercel.app';
+        // APP_FRONTEND_URL or FRONTEND_URL must be set in Railway env vars to:
+        // https://voxpilot-app.vercel.app
+        const frontendUrl = process.env.APP_FRONTEND_URL
+            || process.env.FRONTEND_URL
+            || 'https://voxpilot-app.vercel.app';
         return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=success`);
     });
 }
