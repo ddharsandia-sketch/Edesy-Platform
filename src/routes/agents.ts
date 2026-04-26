@@ -1,7 +1,10 @@
 import { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
 import { prisma } from '../lib/prisma'
+import { getWorkerUrl } from '../lib/env'
 import { requireAuth } from '../middleware/auth'
+import { runSimulationBatch, simulationJobs } from '../lib/simulator'
+import { randomUUID } from 'crypto'
 
 export async function agentRoutes(app: FastifyInstance) {
 
@@ -15,66 +18,90 @@ export async function agentRoutes(app: FastifyInstance) {
     return reply.send(agents)
   })
 
+  // GET /agents/:id — Fetch a single agent
+  app.get('/agents/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { id } = request.params as { id: string }
+    const agent = await prisma.agent.findFirst({
+      where: { id, workspaceId },
+      include: { phoneNumbers: true, _count: { select: { calls: true } } }
+    })
+    if (!agent) {
+      return reply.code(404).send({ error: 'Agent not found' })
+    }
+    return reply.send(agent)
+  })
+
   // POST /agents — Create new agent
   app.post('/agents', { preHandler: requireAuth }, async (request, reply) => {
-    const { workspaceId } = request.user as { workspaceId: string }
-    const body = request.body as {
-      name: string
-      personaPrompt: string
-      language?: string
-      voiceProvider?: string
-      voiceId?: string
-      sttProvider?: string
-      llmModel?: string
-      useGeminiLive?: boolean
-      extractionSchema?: string | object
-      templateId?: string
-      // These come from the wizard but are NOT Prisma columns:
-      tierId?: string
-      useCaseId?: string
-    }
+    try {
+      const { workspaceId } = request.user as { workspaceId: string }
+      const body = request.body as Record<string, any>;
 
-    // Validate: personaPrompt must be at least 50 characters
-    if (!body.personaPrompt || body.personaPrompt.length < 50) {
-      return reply.code(400).send({
-        error:
-          'personaPrompt must be at least 50 characters. Describe the agent persona in detail.'
-      })
-    }
-
-    let parsedSchema = null
-    if (body.extractionSchema) {
-      try {
-        parsedSchema = typeof body.extractionSchema === 'string' 
-          ? JSON.parse(body.extractionSchema) 
-          : body.extractionSchema
-      } catch {
-        // Invalid JSON in schema — ignore it and save without schema
-        parsedSchema = null
+      // ── Validate required fields ─────────────────────────────────────────────
+      if (!body.name?.trim()) {
+        return reply.status(400).send({ error: "Agent name is required" });
       }
-    }
-
-    // Only pass fields that exist in the Prisma Agent model
-    const agent = await prisma.agent.create({
-      data: { 
-        workspaceId,
-        name: body.name,
-        personaPrompt: body.personaPrompt,
-        language: body.language ?? 'en',
-        voiceProvider: body.voiceProvider ?? 'cartesia',
-        voiceId: body.voiceId ?? '21m00Tcm4TlvDq8ikWAM',
-        sttProvider: body.sttProvider ?? 'deepgram',
-        llmModel: body.llmModel ?? 'gpt-4o-mini',
-        useGeminiLive: body.tierId === 'gemini_live' || (body.useGeminiLive ?? false),
-        templateId: body.templateId ?? null,
-        extractionSchema: parsedSchema ?? undefined
+      if (!body.personaPrompt?.trim() || body.personaPrompt.trim().length < 10) {
+        return reply.status(400).send({ error: "Persona prompt must be at least 10 characters" });
       }
-    })
 
-    // Prefetch greeting audio into Redis (non-blocking — failure is safe)
-    prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider)
+      // ── Resolve provider config from tier/language ────────────────────────────
+      const language   = body.language ?? "en";
+      const tierId     = body.tierId   ?? "efficient";
+      const gender     = body.gender   ?? "female";
 
-    return reply.code(201).send(agent)
+      const INDIAN = new Set(["hi","gu","mr","ta","te","kn","bn","ml","pa","or"]);
+      const isIndian = INDIAN.has(language);
+
+      // Defaults — never crash on missing provider fields
+      const sttProvider = body.sttProvider ?? (isIndian ? "sarvam" : "deepgram");
+      const ttsProvider = body.ttsProvider ?? (isIndian ? "sarvam" : "elevenlabs");
+      const llmModel    = body.llmModel    ?? "gemini-2.0-flash";
+
+      const SARVAM_VOICES: Record<string, Record<string, string>> = {
+        hi: { female: "meera",  male: "arjun"   },
+        gu: { female: "diya",   male: "neel"    },
+        mr: { female: "priya",  male: "rohan"   },
+        ta: { female: "kavya",  male: "karthik" },
+        te: { female: "anushka",male: "vikram"  },
+      };
+      const voiceId = body.voiceId ?? (
+        isIndian
+          ? (SARVAM_VOICES[language]?.[gender] ?? "meera")
+          : (gender === "male" ? "VR6AewLTigWG4xSOukaG" : "21m00Tcm4TlvDq8ikWAM")
+      );
+
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId,
+          name:              body.name.trim(),
+          personaPrompt:     body.personaPrompt.trim(),
+          language,
+          voiceId,
+          voiceProvider:     ttsProvider,
+          sttProvider,
+          llmModel,
+          telephonyProvider: body.telephonyProvider ?? (isIndian ? "exotel" : "twilio"),
+          tierId,
+          useCaseId:         body.useCaseId  ?? "receptionist",
+          isActive:          false,   // starts inactive — deploy separately
+          industry:          body.industry   ?? "general",
+        },
+      });
+
+      // Prefetch greeting audio into Redis (non-blocking — failure is safe)
+      prefetchGreeting(agent.id, agent.personaPrompt, agent.voiceId, agent.voiceProvider || 'elevenlabs')
+
+      return reply.status(201).send(agent);
+
+    } catch (err: any) {
+      console.error("[POST /agents]", err.message);
+      if (err.code === "P2002") {
+        return reply.status(400).send({ error: "An agent with this name already exists" });
+      }
+      return reply.status(500).send({ error: err.message ?? "Failed to create agent" });
+    }
   })
 
   // PATCH /agents/:id — Update agent
@@ -167,44 +194,44 @@ export async function agentRoutes(app: FastifyInstance) {
       maxTurns?: number
     }
 
-    // Fetch full agent (need persona_prompt)
-    const agent = await prisma.agent.findFirst({
-      where: { id, workspaceId }
-    })
+    if (numSimulations > 50) return reply.code(400).send({ error: 'Maximum 50 simulations per batch' })
+    if (maxTurns > 15) return reply.code(400).send({ error: 'Maximum 15 turns per call' })
+
+    const agent = await prisma.agent.findFirst({ where: { id, workspaceId } })
     if (!agent) return reply.code(404).send({ error: 'Agent not found' })
-
-    // Start simulation job on Python worker
-    const res = await fetch('http://localhost:8000/simulate/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        agent_id: id,
-        persona_prompt: agent.personaPrompt,
-        num_simulations: numSimulations,
-        max_turns: maxTurns,
-      })
-    })
-
-    if (!res.ok) {
-      const err = await res.json()
-      return reply.code(res.status).send(err)
+    if (!agent.personaPrompt || agent.personaPrompt.length < 50) {
+      return reply.code(400).send({ error: 'Agent persona prompt is too short (min 50 chars)' })
     }
 
-    return reply.send(await res.json())
+    const jobId = randomUUID()
+    simulationJobs.set(jobId, { status: 'running', results: null, error: null, started_at: Date.now() })
+
+    // Run in background — don't await
+    runSimulationBatch(agent.personaPrompt, numSimulations, maxTurns)
+      .then(results => {
+        simulationJobs.set(jobId, { status: 'completed', results, error: null, started_at: simulationJobs.get(jobId)!.started_at })
+      })
+      .catch((err: Error) => {
+        simulationJobs.set(jobId, { status: 'failed', results: null, error: err.message, started_at: simulationJobs.get(jobId)!.started_at })
+      })
+
+    return reply.send({
+      job_id: jobId,
+      status: 'running',
+      message: `Running ${numSimulations} adversarial simulations.`,
+      estimated_seconds: numSimulations * 3
+    })
   })
 
   /**
    * GET /agents/:id/simulate/:jobId
    * Poll for simulation results.
-   * When status === "completed", results contains full report.
    */
   app.get('/agents/:id/simulate/:jobId', { preHandler: requireAuth }, async (request, reply) => {
     const { jobId } = request.params as { id: string; jobId: string }
-
-    const res = await fetch(`http://localhost:8000/simulate/status/${jobId}`)
-    if (!res.ok) return reply.code(404).send({ error: 'Job not found' })
-
-    return reply.send(await res.json())
+    const job = simulationJobs.get(jobId)
+    if (!job) return reply.code(404).send({ error: 'Job not found' })
+    return reply.send(job)
   })
 
   /**
@@ -249,28 +276,35 @@ export async function agentRoutes(app: FastifyInstance) {
       })
     }
 
-    // Configure Twilio webhook for this number automatically
-    const twilioClient = twilio(
-      process.env.TWILIO_ACCOUNT_SID!,
-      process.env.TWILIO_AUTH_TOKEN!
-    )
+    // Find the active telephony provider from workspace settings
+    const workspaceSettings = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+    const telephonyProvider = (workspaceSettings as any)?.activeTel || 'twilio';
 
-    try {
-      // Find the number in Twilio account
-      const twilioNumbers = await twilioClient.incomingPhoneNumbers.list({ phoneNumber: number })
-      if (twilioNumbers.length > 0) {
-        // Update webhook URL
-        await twilioClient.incomingPhoneNumbers(twilioNumbers[0].sid).update({
-          voiceUrl: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/inbound`,
-          voiceMethod: 'POST',
-          statusCallback: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/status`,
-          statusCallbackMethod: 'POST',
-        })
-        console.log(`[TWILIO] Configured webhook for ${number}`)
+    if (telephonyProvider === 'twilio') {
+      // Configure Twilio webhook for this number automatically
+      const twilioClient = twilio(
+        (workspaceSettings as any)?.twilioAccountSid || process.env.TWILIO_ACCOUNT_SID!,
+        (workspaceSettings as any)?.twilioAuthToken || process.env.TWILIO_AUTH_TOKEN!
+      );
+
+      try {
+        const twilioNumbers = await twilioClient.incomingPhoneNumbers.list({ phoneNumber: number });
+        if (twilioNumbers.length > 0) {
+          await twilioClient.incomingPhoneNumbers(twilioNumbers[0].sid).update({
+            voiceUrl: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/inbound`,
+            voiceMethod: 'POST',
+            statusCallback: `${process.env.NEXT_PUBLIC_API_URL}/webhooks/twilio/status`,
+            statusCallbackMethod: 'POST',
+          });
+          console.log(`[TWILIO] Configured webhook for ${number}`);
+        }
+      } catch (err) {
+        console.warn(`[TWILIO] Could not auto-configure webhook for ${number}:`, err);
       }
-    } catch (err) {
-      console.warn(`[TWILIO] Could not auto-configure webhook for ${number}:`, err)
-      // Non-blocking — user can configure manually in Twilio console
+    } else if (telephonyProvider === 'exotel') {
+      // For Exotel, webhooks are configured via the App Bazaar in the Exotel dashboard
+      const exotelPassthruUrl = `${process.env.NEXT_PUBLIC_API_URL}/webhooks/exotel/passthru`;
+      console.log(`[EXOTEL] Webhook configuration required for ${number}. Please set your Exotel App Bazaar "Passthru" URL to: ${exotelPassthruUrl}`);
     }
 
     const phoneNumber = await prisma.phoneNumber.create({
@@ -307,7 +341,9 @@ async function prefetchGreeting(
   voiceProvider: string
 ) {
   try {
-    const workerUrl = process.env.VOICE_WORKER_URL || 'http://localhost:8000'
+    const isProd = process.env.NODE_ENV === 'production'
+    const defaultUrl = isProd ? 'http://edesyworker.railway.internal:8000' : 'http://localhost:8000'
+    const workerUrl = process.env.VOICE_WORKER_URL || defaultUrl
     const response = await fetch(`${workerUrl}/prefetch-greeting`, {
       method: 'POST',
       headers: { 

@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma'
+import { getWorkerUrl } from '../lib/env'
 import { redis } from '../lib/redis'
 export async function webhookRoutes(app: FastifyInstance) {
   /**
@@ -96,7 +97,8 @@ export async function webhookRoutes(app: FastifyInstance) {
     const livekitToken = await token.toJwt()
 
     // Fire-and-forget: start voice pipeline on Python worker
-    fetch(`${process.env.VOICE_WORKER_URL}/start-call`, {
+    const workerUrl = getWorkerUrl()
+    fetch(`${workerUrl}/start-call`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -344,7 +346,7 @@ export async function webhookRoutes(app: FastifyInstance) {
     await redis.setex(`agent_prompt:${callSid}`, 3600, agent.personaPrompt)
 
     // The voice worker WebSocket URL — Exotel will stream audio here
-    const workerUrl = process.env.VOICE_WORKER_URL || 'http://edesyworker.railway.internal:8000'
+    const workerUrl = getWorkerUrl()
     const wsUrl = workerUrl.replace(/^http/, 'ws') + '/exotel-ws'
 
     console.log(`[EXOTEL] Routing call ${callSid} → agent "${agent.name}" → ${wsUrl}`)

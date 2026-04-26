@@ -39,7 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config({ path: '../../.env' });
 // Validate environment variables before anything else
-require("./lib/env");
+const env_1 = require("./lib/env");
 const Sentry = __importStar(require("@sentry/node"));
 // Initialize Sentry before everything else
 if (process.env.SENTRY_DSN) {
@@ -77,7 +77,16 @@ app.register(fastify_raw_body_1.default, {
     runFirst: true,
 });
 app.register(cors_1.default, {
-    origin: true,
+    origin: (origin, cb) => {
+        // Allow local development, any vercel deployment, or explicitly allowed origins
+        if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.vercel.app')) {
+            return cb(null, true);
+        }
+        const allowed = process.env.ALLOWED_ORIGINS?.split(',') || [];
+        if (allowed.includes(origin))
+            return cb(null, true);
+        cb(new Error('Not allowed by CORS'), false);
+    },
     credentials: true
 });
 app.register(jwt_1.default, { secret: process.env.JWT_SECRET });
@@ -102,7 +111,7 @@ app.register(campaigns_1.campaignRoutes);
 app.register(settings_1.settingsRoutes);
 app.register(ai_1.aiRoutes, { prefix: '/ai' });
 app.register(integrations_1.integrationRoutes);
-// Webhooks: Stripe needs rawBody, Twilio needs no parsing — register last
+// Webhooks: PayPal + Twilio need rawBody — register last
 app.register(webhooks_1.webhookRoutes);
 app.get('/health', async () => ({ status: 'ok' }));
 // Start BullMQ post-call worker
@@ -129,9 +138,8 @@ start();
 if (process.env.NODE_ENV === 'production') {
     setInterval(async () => {
         try {
-            if (process.env.VOICE_WORKER_URL) {
-                await fetch(`${process.env.VOICE_WORKER_URL}/health`);
-            }
+            const url = (0, env_1.getWorkerUrl)();
+            await fetch(`${url}/health`);
         }
         catch { /* Silent — non-critical */ }
     }, 4 * 60 * 1000); // Every 4 minutes

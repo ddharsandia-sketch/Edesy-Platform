@@ -443,21 +443,24 @@ export async function callRoutes(app: FastifyInstance) {
     const since = new Date()
     since.setDate(since.getDate() - Number(days))
 
-    const result = await prisma.$queryRaw<Array<{ date: string; count: bigint }>>`
-      SELECT
-        DATE_TRUNC('day', "startTime")::date::text AS date,
-        COUNT(*) AS count
-      FROM "Call"
-      WHERE "workspaceId" = CAST(${workspaceId} AS UUID)
-        AND "startTime" >= ${since}
-      GROUP BY DATE_TRUNC('day', "startTime")
-      ORDER BY date ASC
-    `
+    // Build day-by-day data using Prisma ORM (avoids raw SQL UUID type mismatch)
+    const allCalls = await prisma.call.findMany({
+      where: { workspaceId, startTime: { gte: since } },
+      select: { startTime: true },
+    })
 
-    return reply.send(result.map(r => ({
-      date: r.date,
-      count: Number(r.count)
-    })))
+    // Group by date string in JS
+    const grouped: Record<string, number> = {}
+    for (const call of allCalls) {
+      const date = call.startTime.toISOString().slice(0, 10) // "2026-04-12"
+      grouped[date] = (grouped[date] || 0) + 1
+    }
+
+    const result = Object.entries(grouped)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, count]) => ({ date, count }))
+
+    return reply.send(result)
   })
 
   /**

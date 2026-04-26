@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.env = void 0;
+exports.getWorkerUrl = exports.env = void 0;
 const zod_1 = require("zod");
 const envSchema = zod_1.z.object({
     NODE_ENV: zod_1.z.enum(['development', 'production', 'test']).default('development'),
@@ -29,9 +29,10 @@ const envSchema = zod_1.z.object({
     LIVEKIT_API_KEY: zod_1.z.string().optional(),
     LIVEKIT_API_SECRET: zod_1.z.string().optional(),
     LIVEKIT_URL: zod_1.z.string().optional(),
-    // Billing
-    STRIPE_SECRET_KEY: zod_1.z.string().optional(),
-    STRIPE_WEBHOOK_SECRET: zod_1.z.string().optional(),
+    // AI (Global keys for magic-prompt and schema gen)
+    GLOBAL_GROQ_API_KEY: zod_1.z.string().optional(),
+    GLOBAL_CEREBRAS_API_KEY: zod_1.z.string().optional(),
+    // Billing (PayPal only)
     PAYPAL_CLIENT_ID: zod_1.z.string().optional(),
     PAYPAL_CLIENT_SECRET: zod_1.z.string().optional(),
     PAYPAL_WEBHOOK_ID: zod_1.z.string().optional(),
@@ -56,3 +57,11 @@ if (!result.success) {
     process.exit(1);
 }
 exports.env = result.data;
+const getWorkerUrl = () => {
+    if (process.env.VOICE_WORKER_URL)
+        return process.env.VOICE_WORKER_URL;
+    return process.env.NODE_ENV === 'production'
+        ? 'http://edesyworker.railway.internal:8000'
+        : 'http://localhost:8000';
+};
+exports.getWorkerUrl = getWorkerUrl;

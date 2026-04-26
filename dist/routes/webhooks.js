@@ -37,12 +37,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.webhookRoutes = webhookRoutes;
-const stripe_1 = __importDefault(require("stripe"));
 const twilio_1 = __importDefault(require("twilio"));
 const zod_1 = require("zod");
 const prisma_1 = require("../lib/prisma");
+const env_1 = require("../lib/env");
 const redis_1 = require("../lib/redis");
-const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-03-25.dahlia' });
 async function webhookRoutes(app) {
     /**
      * POST /webhooks/twilio/inbound
@@ -116,7 +115,8 @@ async function webhookRoutes(app) {
         token.addGrant({ roomJoin: true, room: roomName });
         const livekitToken = await token.toJwt();
         // Fire-and-forget: start voice pipeline on Python worker
-        fetch(`${process.env.VOICE_WORKER_URL}/start-call`, {
+        const workerUrl = (0, env_1.getWorkerUrl)();
+        fetch(`${workerUrl}/start-call`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -221,89 +221,6 @@ async function webhookRoutes(app) {
             });
         }
         return reply.send({ ok: true });
-    });
-    /**
-     * POST /webhooks/stripe
-     * Handles Stripe subscription lifecycle events.
-     *
-     * CRITICAL: Must read from req.rawBody (Buffer), NOT req.body (parsed object).
-     * Stripe signature verification will throw if given a parsed JS object.
-     * fastify-raw-body is registered globally in index.ts with global: false,
-     * and this route opts in via config: { rawBody: true }.
-     */
-    app.post('/webhooks/stripe', {
-        config: { rawBody: true } // Opts into raw body capture for this route only
-    }, async (request, reply) => {
-        const sig = request.headers['stripe-signature'];
-        // Read raw Buffer — NOT request.body (which is already JSON-parsed)
-        const rawPayload = request.rawBody;
-        if (!rawPayload) {
-            console.error('[STRIPE] rawBody is missing — check fastify-raw-body registration order in index.ts');
-            return reply.code(400).send('Missing raw body');
-        }
-        let event;
-        try {
-            event = stripe.webhooks.constructEvent(rawPayload, // Buffer — Stripe computes HMAC against this exact byte sequence
-            sig, process.env.STRIPE_WEBHOOK_SECRET);
-        }
-        catch (err) {
-            console.error(`[STRIPE] ❌ Signature verification failed: ${err.message}`);
-            return reply.code(400).send(`Webhook Error: ${err.message}`);
-        }
-        console.log(`[STRIPE] Event: ${event.type}`);
-        switch (event.type) {
-            // ── Subscription started or upgraded ───────────────────────────────────
-            case 'customer.subscription.created':
-            case 'customer.subscription.updated': {
-                const sub = event.data.object;
-                const workspaceId = sub.metadata?.workspaceId;
-                const tier = sub.metadata?.tier || 'starter';
-                if (workspaceId) {
-                    await prisma_1.prisma.workspace.update({
-                        where: { id: workspaceId },
-                        data: {
-                            stripeSubscriptionId: sub.id,
-                            planTier: sub.status === 'active' ? tier : 'free',
-                            planExpiresAt: new Date(sub.current_period_end * 1000),
-                        }
-                    });
-                    console.log(`[STRIPE] Workspace ${workspaceId} updated to ${tier} (${sub.status})`);
-                }
-                break;
-            }
-            // ── Subscription cancelled ─────────────────────────────────────────────
-            case 'customer.subscription.deleted': {
-                const sub = event.data.object;
-                const workspaceId = sub.metadata?.workspaceId;
-                if (workspaceId) {
-                    await prisma_1.prisma.workspace.update({
-                        where: { id: workspaceId },
-                        data: {
-                            planTier: 'free',
-                            stripeSubscriptionId: null,
-                            planExpiresAt: null,
-                        }
-                    });
-                    console.log(`[STRIPE] Workspace ${workspaceId} downgraded to free`);
-                }
-                break;
-            }
-            // ── Payment succeeded ──────────────────────────────────────────────────
-            case 'invoice.payment_succeeded': {
-                const invoice = event.data.object;
-                console.log(`[STRIPE] Payment succeeded: $${(invoice.amount_paid / 100).toFixed(2)}`);
-                // You could send a receipt email here via Resend/SendGrid
-                break;
-            }
-            // ── Payment failed ─────────────────────────────────────────────────────
-            case 'invoice.payment_failed': {
-                const invoice = event.data.object;
-                console.warn(`[STRIPE] Payment FAILED for customer: ${invoice.customer}`);
-                // TODO: Send dunning email to workspace owner
-                break;
-            }
-        }
-        return reply.send({ received: true });
     });
     /**
      * POST /webhooks/paypal
@@ -415,7 +332,7 @@ async function webhookRoutes(app) {
         // Store agent prompt in Redis so the WebSocket handler can pick it up
         await redis_1.redis.setex(`agent_prompt:${callSid}`, 3600, agent.personaPrompt);
         // The voice worker WebSocket URL — Exotel will stream audio here
-        const workerUrl = process.env.VOICE_WORKER_URL || 'http://edesyworker.railway.internal:8000';
+        const workerUrl = (0, env_1.getWorkerUrl)();
         const wsUrl = workerUrl.replace(/^http/, 'ws') + '/exotel-ws';
         console.log(`[EXOTEL] Routing call ${callSid} → agent "${agent.name}" → ${wsUrl}`);
         // Exotel Voicebot Applet JSON response

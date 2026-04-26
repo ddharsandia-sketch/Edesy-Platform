@@ -1,30 +1,12 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma'
+import { requireAuth } from '../middleware/auth'
 
 export async function integrationRoutes(fastify: FastifyInstance) {
-  // Auth helper
-  async function getWorkspaceId(request: any, reply: any): Promise<string | null> {
-    try {
-      await request.jwtVerify()
-      const workspace = await prisma.workspace.findFirst({
-        where: { ownerId: request.user.id },
-        select: { id: true },
-      })
-      if (!workspace) {
-        reply.status(403).send({ error: 'No workspace found' })
-        return null
-      }
-      return workspace.id
-    } catch {
-      reply.status(401).send({ error: 'Unauthorized' })
-      return null
-    }
-  }
 
   // GET /integrations — list all integrations for workspace
-  fastify.get('/integrations', async (request, reply) => {
-    const workspaceId = await getWorkspaceId(request, reply)
-    if (!workspaceId) return
+  fastify.get('/integrations', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
 
     const integrations = await prisma.integration.findMany({
       where: { workspaceId },
@@ -45,9 +27,8 @@ export async function integrationRoutes(fastify: FastifyInstance) {
   })
 
   // POST /integrations — create or update an integration
-  fastify.post('/integrations', async (request, reply) => {
-    const workspaceId = await getWorkspaceId(request, reply)
-    if (!workspaceId) return
+  fastify.post('/integrations', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
 
     const { type, label, apiKey, config, enabled } = request.body as {
       type: string
@@ -82,10 +63,8 @@ export async function integrationRoutes(fastify: FastifyInstance) {
   })
 
   // PATCH /integrations/:id — toggle enabled / update config
-  fastify.patch('/integrations/:id', async (request, reply) => {
-    const workspaceId = await getWorkspaceId(request, reply)
-    if (!workspaceId) return
-
+  fastify.patch('/integrations/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
     const { id } = request.params as { id: string }
     const body = request.body as Partial<{ enabled: boolean; apiKey: string; config: unknown; label: string }>
 
@@ -109,10 +88,8 @@ export async function integrationRoutes(fastify: FastifyInstance) {
   })
 
   // DELETE /integrations/:id
-  fastify.delete('/integrations/:id', async (request, reply) => {
-    const workspaceId = await getWorkspaceId(request, reply)
-    if (!workspaceId) return
-
+  fastify.delete('/integrations/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
     const { id } = request.params as { id: string }
     const integration = await prisma.integration.findFirst({ where: { id, workspaceId } })
     if (!integration) return reply.status(404).send({ error: 'Not found' })
@@ -122,10 +99,8 @@ export async function integrationRoutes(fastify: FastifyInstance) {
   })
 
   // POST /integrations/:id/test — fire a test payload to validate credentials
-  fastify.post('/integrations/:id/test', async (request, reply) => {
-    const workspaceId = await getWorkspaceId(request, reply)
-    if (!workspaceId) return
-
+  fastify.post('/integrations/:id/test', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
     const { id } = request.params as { id: string }
     const integration = await prisma.integration.findFirst({ where: { id, workspaceId } })
     if (!integration) return reply.status(404).send({ error: 'Not found' })
@@ -148,7 +123,6 @@ export async function integrationRoutes(fastify: FastifyInstance) {
 
     try {
       const { triggerIntegrations } = await import('../lib/integrations')
-      // Only fire this specific integration
       await triggerIntegrations(workspaceId, testPayload)
       return reply.send({ success: true, message: 'Test payload sent' })
     } catch (err: any) {

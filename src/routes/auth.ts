@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify'
 import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma'
-
+import { google } from 'googleapis'
+import { requireAuth } from '../middleware/auth'
 const SUPABASE_URL = process.env.SUPABASE_URL || ''
 
 // Local dev mode when Supabase credentials are placeholders
@@ -85,8 +86,14 @@ export async function authRoutes(app: FastifyInstance) {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) return reply.code(401).send({ error: 'Invalid credentials' })
 
-    const workspace = await prisma.workspace.findFirst({ where: { ownerId: data.user.id } })
-    if (!workspace) return reply.code(404).send({ error: 'Workspace not found' })
+    let workspace = await prisma.workspace.findFirst({ where: { ownerId: data.user.id } })
+    if (!workspace) {
+      // Auto-create workspace if missing (fixes UI signup disconnect)
+      const workspaceName = data.user.user_metadata?.workspace_name || `${email}'s Workspace`
+      workspace = await prisma.workspace.create({
+        data: { name: workspaceName, ownerId: data.user.id, plan: 'free' }
+      })
+    }
 
     const isFounder = email === 'jabir.islam@gau.edu.ge'
     if (isFounder && workspace.plan !== 'enterprise') {
@@ -102,4 +109,93 @@ export async function authRoutes(app: FastifyInstance) {
     )
     return reply.send({ token, workspaceId: workspace.id })
   })
+
+  // GET /auth/google?state=workspaceId
+  app.get('/auth/google', async (request, reply) => {
+    const { state } = request.query as { state?: string }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return reply.code(500).send({ error: 'Google OAuth not configured. GOOGLE_CLIENT_ID is missing.' })
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/calendar.events'],
+      prompt: 'consent',
+      ...(state && { state }), // pass workspaceId through to callback
+    });
+
+    return reply.redirect(url);
+  });
+
+  // GET /auth/google/callback
+  // In a real app we'd pass state (workspaceId) to Google and get it back, 
+  // but to simplify, if the user logs in and gets redirected back we can update their workspace.
+  // We'll require auth for this or assume state passed back has workspaceId.
+  app.get('/auth/google/callback', async (request, reply) => {
+    const { code, state } = request.query as { code: string, state?: string };
+
+    if (!code) return reply.code(400).send({ error: 'No code provided' });
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+
+    let access_token, refresh_token;
+    try {
+      const { tokens } = await oauth2Client.getToken(code);
+      access_token = tokens.access_token;
+      refresh_token = tokens.refresh_token;
+    } catch (err: any) {
+      console.error('[Google OAuth] Token exchange failed:', err.response?.data || err.message);
+      // Fallback domain
+      const frontendUrl = process.env.APP_FRONTEND_URL || process.env.FRONTEND_URL || 'https://voxpilot-app.vercel.app';
+      return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=error&details=${encodeURIComponent(err.message)}`);
+    }
+
+    // Ideally, state = workspaceId. If not, we would decode JWT from cookie or similar.
+    // Assuming state is the workspaceId for this demo integration
+    if (state) {
+      await prisma.workspace.update({
+        where: { id: state },
+        data: {
+          googleAccessToken:  access_token,
+          googleRefreshToken: refresh_token ?? undefined,
+          googleTokenExpiry:  new Date(Date.now() + 3600 * 1000), // 1 hour
+        } as any,
+      });
+
+      // Also create integration record so frontend sees it
+      const existing = await prisma.integration.findFirst({
+        where: { workspaceId: state, type: 'google_calendar' },
+      });
+      if (!existing) {
+        await prisma.integration.create({
+          data: {
+            workspaceId: state,
+            type: 'google_calendar',
+            label: 'Google Calendar',
+            apiKey: 'oauth_token',
+            enabled: true,
+          }
+        });
+      }
+    }
+
+    // APP_FRONTEND_URL or FRONTEND_URL must be set in Railway env vars to:
+    // https://voxpilot-app.vercel.app
+    const frontendUrl = process.env.APP_FRONTEND_URL
+      || process.env.FRONTEND_URL
+      || 'https://voxpilot-app.vercel.app';
+    return reply.redirect(`${frontendUrl}/dashboard/settings/integrations?google=success`);
+  });
 }
+

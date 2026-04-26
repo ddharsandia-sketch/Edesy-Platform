@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 dotenv.config({ path: '../../.env' })
 
 // Validate environment variables before anything else
-import './lib/env'
+import { env, getWorkerUrl } from './lib/env'
 
 import * as Sentry from '@sentry/node'
 
@@ -32,7 +32,6 @@ import { campaignRoutes } from './routes/campaigns'
 import { settingsRoutes } from './routes/settings'
 import { aiRoutes } from './routes/ai'
 import { integrationRoutes } from './routes/integrations'
-
 const app = Fastify({ logger: true })
 
 // FIX 1: Register raw body BEFORE any routes — required for Stripe webhook signature verification
@@ -46,7 +45,16 @@ app.register(rawBody, {
 })
 
 app.register(cors, {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || false,
+  origin: (origin, cb) => {
+    // Allow local development, any vercel deployment, or explicitly allowed origins
+    if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.vercel.app')) {
+      return cb(null, true)
+    }
+    const allowed = process.env.ALLOWED_ORIGINS?.split(',') || []
+    if (allowed.includes(origin)) return cb(null, true)
+    
+    cb(new Error('Not allowed by CORS'), false)
+  },
   credentials: true
 })
 app.register(jwt, { secret: process.env.JWT_SECRET! })
@@ -107,9 +115,8 @@ start()
 if (process.env.NODE_ENV === 'production') {
   setInterval(async () => {
     try {
-      if (process.env.VOICE_WORKER_URL) {
-        await fetch(`${process.env.VOICE_WORKER_URL}/health`)
-      }
+      const url = getWorkerUrl()
+      await fetch(`${url}/health`)
     } catch { /* Silent — non-critical */ }
   }, 4 * 60 * 1000)  // Every 4 minutes
 }

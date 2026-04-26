@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.aiRoutes = aiRoutes;
 const zod_1 = require("zod");
+const auth_1 = require("../middleware/auth");
 const ai_1 = require("../lib/ai");
 async function aiRoutes(fastify) {
     // Simple health check for the /ai prefix
@@ -43,14 +44,15 @@ async function aiRoutes(fastify) {
     const MagicPromptSchema = zod_1.z.object({
         description: zod_1.z.string().min(5)
     });
-    fastify.post('/magic-prompt', async (request, reply) => {
+    fastify.post('/magic-prompt', { preHandler: [auth_1.requireAuth] }, async (request, reply) => {
         try {
+            const { workspaceId } = request.user;
             const validation = MagicPromptSchema.safeParse(request.body);
             if (!validation.success) {
                 return reply.status(400).send({ success: false, error: 'Invalid description' });
             }
             const { description } = validation.data;
-            const enhancedPrompt = await (0, ai_1.generateMagicPrompt)(description);
+            const enhancedPrompt = await (0, ai_1.generateMagicPrompt)(description, workspaceId);
             return reply.send({ success: true, enhancedPrompt });
         }
         catch (error) {
@@ -62,14 +64,15 @@ async function aiRoutes(fastify) {
     const SchemaGeneratorSchema = zod_1.z.object({
         description: zod_1.z.string().min(5)
     });
-    fastify.post('/generate-schema', async (request, reply) => {
+    fastify.post('/generate-schema', { preHandler: [auth_1.requireAuth] }, async (request, reply) => {
         try {
+            const { workspaceId } = request.user;
             const validation = SchemaGeneratorSchema.safeParse(request.body);
             if (!validation.success) {
                 return reply.status(400).send({ success: false, error: 'Invalid description' });
             }
             const { description } = validation.data;
-            const schema = await (0, ai_1.generateSchema)(description);
+            const schema = await (0, ai_1.generateSchema)(description, workspaceId);
             return reply.send({ success: true, schema });
         }
         catch (error) {
@@ -85,26 +88,51 @@ async function aiRoutes(fastify) {
             content: zod_1.z.string()
         }))
     });
-    fastify.post('/simulate-chat', async (request, reply) => {
+    fastify.post('/simulate-chat', { preHandler: [auth_1.requireAuth] }, async (request, reply) => {
         try {
+            const { workspaceId } = request.user;
             const validation = SimulateChatSchema.safeParse(request.body);
             if (!validation.success) {
                 return reply.status(400).send({ error: 'Invalid body' });
             }
             const { agentId, messages } = validation.data;
-            const { groqClient } = await Promise.resolve().then(() => __importStar(require('../lib/ai')));
             const { prisma } = await Promise.resolve().then(() => __importStar(require('../lib/prisma')));
-            const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+            const [agent, workspace] = await Promise.all([
+                prisma.agent.findUnique({ where: { id: agentId } }),
+                prisma.workspace.findUnique({ where: { id: workspaceId } }),
+            ]);
             if (!agent) {
                 return reply.status(404).send({ error: 'Agent not found' });
+            }
+            // Pick the best available LLM key in priority order:
+            // 1. Workspace Groq key  2. Workspace OpenAI key  3. Global Groq key  4. Error
+            const groqKey = workspace?.groqApiKey || process.env.GLOBAL_GROQ_API_KEY;
+            const openaiKey = workspace?.openaiApiKey || process.env.OPENAI_API_KEY;
+            const anthropicKey = workspace?.anthropicApiKey;
+            if (!groqKey && !openaiKey && !anthropicKey) {
+                return reply.status(400).send({
+                    error: 'No LLM API key found. Please add a Groq or OpenAI key in Settings → API Keys.'
+                });
+            }
+            const OpenAI = (await Promise.resolve().then(() => __importStar(require('openai')))).default;
+            let client;
+            let model;
+            if (groqKey) {
+                client = new OpenAI({ apiKey: groqKey, baseURL: 'https://api.groq.com/openai/v1' });
+                model = 'llama-3.3-70b-versatile';
+            }
+            else {
+                // OpenAI fallback
+                client = new OpenAI({ apiKey: openaiKey });
+                model = 'gpt-4o-mini';
             }
             // Prepare conversation history
             const conversation = [
                 { role: 'system', content: agent.personaPrompt },
                 ...messages
             ];
-            const stream = await groqClient.chat.completions.create({
-                model: 'llama3-70b-8192',
+            const stream = await client.chat.completions.create({
+                model,
                 messages: conversation,
                 stream: true,
                 temperature: 0.7,

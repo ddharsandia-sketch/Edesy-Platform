@@ -67,3 +67,10 @@ if (!result.success) {
 }
 
 export const env = result.data
+
+export const getWorkerUrl = () => {
+  if (process.env.VOICE_WORKER_URL) return process.env.VOICE_WORKER_URL
+  return process.env.NODE_ENV === 'production' 
+    ? 'http://edesyworker.railway.internal:8000' 
+    : 'http://localhost:8000'
+}
