@@ -15,6 +15,20 @@ export async function agentRoutes(app: FastifyInstance) {
     return reply.send(agents)
   })
 
+  // GET /agents/:id — Fetch a single agent
+  app.get('/agents/:id', { preHandler: requireAuth }, async (request, reply) => {
+    const { workspaceId } = request.user as { workspaceId: string }
+    const { id } = request.params as { id: string }
+    const agent = await prisma.agent.findFirst({
+      where: { id, workspaceId },
+      include: { phoneNumbers: true, _count: { select: { calls: true } } }
+    })
+    if (!agent) {
+      return reply.code(404).send({ error: 'Agent not found' })
+    }
+    return reply.send(agent)
+  })
+
   // POST /agents — Create new agent
   app.post('/agents', { preHandler: requireAuth }, async (request, reply) => {
     try {

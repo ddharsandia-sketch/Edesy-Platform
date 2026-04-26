@@ -17,6 +17,19 @@ async function agentRoutes(app) {
         });
         return reply.send(agents);
     });
+    // GET /agents/:id — Fetch a single agent
+    app.get('/agents/:id', { preHandler: auth_1.requireAuth }, async (request, reply) => {
+        const { workspaceId } = request.user;
+        const { id } = request.params;
+        const agent = await prisma_1.prisma.agent.findFirst({
+            where: { id, workspaceId },
+            include: { phoneNumbers: true, _count: { select: { calls: true } } }
+        });
+        if (!agent) {
+            return reply.code(404).send({ error: 'Agent not found' });
+        }
+        return reply.send(agent);
+    });
     // POST /agents — Create new agent
     app.post('/agents', { preHandler: auth_1.requireAuth }, async (request, reply) => {
         try {
