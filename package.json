@@ -1,12 +1,4 @@
 {
-<<<<<<< Updated upstream
-  "name": "voice-ai-platform",
-  "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
-=======
   "name": "api",
   "version": "1.0.0",
   "description": "",
@@ -76,5 +68,4 @@
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }
->>>>>>> Stashed changes
 }
