@@ -1,8 +1,80 @@
 {
+<<<<<<< Updated upstream
   "name": "voice-ai-platform",
   "private": true,
   "workspaces": [
     "apps/*",
     "packages/*"
   ]
+=======
+  "name": "api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1036.0",
+    "@aws-sdk/s3-request-presigner": "^3.1036.0",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/jwt": "^10.0.0",
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@hubspot/api-client": "^13.5.0",
+    "@notionhq/client": "^5.20.0",
+    "@paypal/checkout-server-sdk": "^1.0.3",
+    "@paypal/payouts-sdk": "^1.1.1",
+    "@prisma/adapter-pg": "^7.7.0",
+    "@prisma/client": "^7.7.0",
+    "@sentry/node": "^10.49.0",
+    "@supabase/supabase-js": "^2.103.3",
+    "@types/pg": "^8.20.0",
+    "bullmq": "^5.74.1",
+    "csv-parse": "^6.2.1",
+    "dotenv": "^17.4.2",
+    "fastify": "^5.8.5",
+    "fastify-raw-body": "^5.0.0",
+    "googleapis": "^171.4.0",
+    "ioredis": "^5.10.1",
+    "jsonwebtoken": "^9.0.3",
+    "livekit-server-sdk": "^2.15.1",
+    "mammoth": "^1.12.0",
+    "openai": "^6.34.0",
+    "p-limit": "^3.1.0",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.20.0",
+    "prisma": "^7.7.0",
+    "signalwire": "^1.0.4",
+    "stripe": "^22.1.0",
+    "twilio": "^5.13.1",
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "nodemon": "^3.1.14",
+    "prettier": "^3.8.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+>>>>>>> Stashed changes
 }

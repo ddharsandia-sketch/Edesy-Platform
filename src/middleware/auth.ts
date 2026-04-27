@@ -1,65 +1,77 @@
 import { FastifyRequest, FastifyReply } from 'fastify'
 import { prisma } from '../lib/prisma'
-import { createClient } from '@supabase/supabase-js'
+import jwt from 'jsonwebtoken'
 
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+interface SupabaseJWTPayload {
+  sub:   string   // Supabase user UUID
+  email: string
+  role:  string
+  exp:   number
+  iat:   number
+}
 
-export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
-  const authHeader = request.headers.authorization
-  if (!authHeader) {
-    return reply.code(401).send({ error: 'No authorization header' })
-  }
-
-  const token = authHeader.replace('Bearer ', '')
-
-  // 1. Try our custom JWT first (used for email/password login)
+export async function requireAuth(
+  request: FastifyRequest,
+  reply:   FastifyReply
+): Promise<void> {
   try {
-    const decoded = await request.jwtVerify() as any
-    if (decoded.workspaceId) {
-      return // Success! request.user is already populated by jwtVerify
+    // 1. Extract token from Authorization header
+    const authHeader = request.headers.authorization
+    if (!authHeader?.startsWith('Bearer ')) {
+      return reply.code(401).send({ error: 'Missing Authorization header' })
     }
-  } catch (err) {
-    // Fall through to Supabase check
-  }
+    const token = authHeader.slice(7)
 
-  // 2. Try Supabase token (used for Google login)
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) {
-      return reply.code(401).send({ error: 'Unauthorized' })
+    // 2. Verify JWT locally using Supabase JWT secret — NO network call, never times out
+    const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET
+    if (!SUPABASE_JWT_SECRET) {
+      console.error('[requireAuth] SUPABASE_JWT_SECRET not set in Railway env vars!')
+      return reply.code(500).send({ error: 'Server auth misconfigured. Contact support.' })
     }
 
-    // Find the workspace for this Supabase user
+    let payload: SupabaseJWTPayload
+    try {
+      payload = jwt.verify(token, SUPABASE_JWT_SECRET) as SupabaseJWTPayload
+    } catch (jwtErr: any) {
+      if (jwtErr.name === 'TokenExpiredError') {
+        return reply.code(401).send({ error: 'Token expired. Please refresh the page and try again.' })
+      }
+      return reply.code(401).send({ error: 'Invalid token' })
+    }
+
+    const userId = payload.sub
+    if (!userId) {
+      return reply.code(401).send({ error: 'Invalid token payload — no user ID' })
+    }
+
+    // 3. Get or create workspace for this user (cached after first request)
     let workspace = await prisma.workspace.findFirst({
-      where: { ownerId: user.id }
+      where: { ownerId: userId },
+      select: { id: true, planTier: true },
     })
 
-    const isFounder = user.email === 'jabir.islam@gau.edu.ge'
-
+    // Auto-create workspace on first login (no more "workspace not found" errors)
     if (!workspace) {
-      // Create a default workspace if it doesn't exist (first time OAuth user)
       workspace = await prisma.workspace.create({
         data: {
-          name: isFounder ? 'Founder Workspace' : `${user.email?.split('@')[0]}'s Workspace`,
-          ownerId: user.id,
-          plan: isFounder ? 'enterprise' : 'free',
-          planTier: isFounder ? 'enterprise' : 'free',
-          onboardingComplete: isFounder ? true : false
-        }
+          ownerId: userId,
+          name:    payload.email?.split('@')[0] ?? 'My Workspace',
+          planTier: 'free',
+        },
+        select: { id: true, planTier: true },
       })
-    } else if (isFounder && workspace.plan !== 'enterprise') {
-      // Auto-upgrade founder if not already enterprise
-      workspace = await prisma.workspace.update({
-        where: { id: workspace.id },
-        data: { plan: 'enterprise', planTier: 'enterprise', onboardingComplete: true }
-      })
+      console.log(`[requireAuth] Auto-created workspace for user ${userId}`)
     }
 
-    request.user = { userId: user.id, workspaceId: workspace.id, email: user.email, isFounder }
-  } catch (err) {
-    return reply.code(401).send({ error: 'Unauthorized' })
+    // 4. Attach to request — available as request.user in all routes
+    request.user = {
+      id:          userId,
+      email:       payload.email,
+      workspaceId: workspace.id,
+      planTier:    workspace.planTier ?? 'free',
+    }
+  } catch (err: any) {
+    console.error('[requireAuth] Unexpected error:', err.message)
+    return reply.code(500).send({ error: 'Auth error. Please try again.' })
   }
 }
