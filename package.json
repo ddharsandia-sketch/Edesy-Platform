@@ -45,7 +45,7 @@
     "mammoth": "^1.12.0",
     "openai": "^6.34.0",
     "p-limit": "^3.1.0",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "^1.1.1",
     "pg": "^8.20.0",
     "prisma": "^7.7.0",
     "signalwire": "^1.0.4",
