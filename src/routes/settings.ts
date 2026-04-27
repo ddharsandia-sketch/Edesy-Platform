@@ -98,6 +98,32 @@ export async function settingsRoutes(app: FastifyInstance) {
         "elevenLabsApiKey", "cartesiaApiKey",
       ];
 
+      // ── Webhook URL — stored in Webhook table, not Workspace ───────────────
+      if (body.webhookUrl !== undefined) {
+        const url = body.webhookUrl?.trim() || null;
+        if (url) {
+          // Upsert: update if one exists, create otherwise
+          const existing = await prisma.webhook.findFirst({
+            where: { workspaceId },
+          });
+          if (existing) {
+            await prisma.webhook.update({
+              where: { id: existing.id },
+              data: { url },
+            });
+          } else {
+            await prisma.webhook.create({
+              data: { workspaceId, url, isActive: true },
+            });
+          }
+          console.log("[PATCH /api/settings] Saved webhookUrl:", url);
+        }
+        // If that's the only field in the body, return early
+        if (Object.keys(body).length === 1) {
+          return reply.send({ success: true, updated: ["webhookUrl"] });
+        }
+      }
+
       const data: Record<string, any> = {};
 
       for (const key of ALLOWED) {
