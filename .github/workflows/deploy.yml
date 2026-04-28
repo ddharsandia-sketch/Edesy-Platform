@@ -13,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.SUBMODULE_PAT }}
           submodules: recursive
 
       - name: Setup Node
@@ -51,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.SUBMODULE_PAT }}
           submodules: recursive
 
       - name: Install Railway CLI
@@ -70,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.SUBMODULE_PAT }}
           submodules: recursive
 
       - name: Install Railway CLI
@@ -89,6 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          token: ${{ secrets.SUBMODULE_PAT }}
           submodules: recursive
 
       - name: Install Vercel CLI
