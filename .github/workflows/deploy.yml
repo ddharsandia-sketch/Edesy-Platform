@@ -12,9 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.SUBMODULE_PAT }}
-          submodules: true
+
+      - name: Checkout app submodules
+        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -51,9 +53,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.SUBMODULE_PAT }}
-          submodules: true
+
+      - name: Checkout app submodules
+        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -71,9 +75,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.SUBMODULE_PAT }}
-          submodules: true
+
+      - name: Checkout app submodules
+        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -91,9 +97,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.SUBMODULE_PAT }}
-          submodules: true
+
+      - name: Checkout app submodules
+        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
 
       - name: Install Vercel CLI
         run: npm install -g vercel
