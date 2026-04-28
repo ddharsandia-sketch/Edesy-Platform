@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: # Enable manual "Run workflow" button in GitHub Actions UI
 
 jobs:
   # ── Test ────────────────────────────────────────────────────────────────────
@@ -12,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout app submodules
-        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
-        env:
-          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+        with:
+          token: ${{ secrets.SUBMODULE_PAT }}
+          submodules: recursive
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -50,14 +49,12 @@ jobs:
   deploy-api:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout app submodules
-        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
-        env:
-          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+        with:
+          token: ${{ secrets.SUBMODULE_PAT }}
+          submodules: recursive
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -77,14 +74,12 @@ jobs:
   deploy-worker:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout app submodules
-        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
-        env:
-          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+        with:
+          token: ${{ secrets.SUBMODULE_PAT }}
+          submodules: recursive
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
@@ -104,14 +99,12 @@ jobs:
   deploy-web:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout app submodules
-        run: git -c url."https://x-access-token:${SUBMODULE_PAT}@github.com/".insteadOf="https://github.com/" submodule update --init apps/api apps/web services/voice-worker
-        env:
-          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+        with:
+          token: ${{ secrets.SUBMODULE_PAT }}
+          submodules: recursive
 
       - name: Install Vercel CLI
         run: npm install -g vercel
