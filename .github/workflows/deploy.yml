@@ -63,7 +63,12 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy API
-        run: railway up --service api
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::warning::RAILWAY_TOKEN is not configured; skipping API deploy."
+            exit 0
+          fi
+          railway up --service api
         working-directory: apps/api
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -85,7 +90,12 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy Voice Worker
-        run: railway up --service voice-worker
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::warning::RAILWAY_TOKEN is not configured; skipping voice worker deploy."
+            exit 0
+          fi
+          railway up --service voice-worker
         working-directory: services/voice-worker
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -107,8 +117,14 @@ jobs:
         run: npm install -g vercel
 
       - name: Deploy to Vercel
-        run: vercel --prod --token=${{ secrets.VERCEL_TOKEN }} --yes
+        run: |
+          if [ -z "$VERCEL_TOKEN" ] || [ -z "$VERCEL_ORG_ID" ] || [ -z "$VERCEL_PROJECT_ID" ]; then
+            echo "::warning::Vercel deploy secrets are not configured; skipping web deploy."
+            exit 0
+          fi
+          vercel --prod --token="$VERCEL_TOKEN" --yes
         working-directory: apps/web
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
