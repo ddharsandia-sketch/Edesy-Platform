@@ -68,7 +68,7 @@ jobs:
             echo "::warning::RAILWAY_TOKEN is not configured; skipping API deploy."
             exit 0
           fi
-          railway up --service api
+          railway up --service EdesyAPI
         working-directory: apps/api
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -95,7 +95,7 @@ jobs:
             echo "::warning::RAILWAY_TOKEN is not configured; skipping voice worker deploy."
             exit 0
           fi
-          railway up --service voice-worker
+          railway up --service EdesyWorker
         working-directory: services/voice-worker
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
