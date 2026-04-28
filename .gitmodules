@@ -1,0 +1,9 @@
+[submodule "apps/api"]
+	path = apps/api
+	url = https://github.com/ddharsandia-sketch/EdesyAPI.git
+[submodule "apps/web"]
+	path = apps/web
+	url = https://github.com/ddharsandia-sketch/EdesyMKC.git
+[submodule "services/voice-worker"]
+	path = services/voice-worker
+	url = https://github.com/ddharsandia-sketch/EdesyWorker.git
